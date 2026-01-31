@@ -1,59 +1,83 @@
+import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime, time
+import pytz
+from concurrent.futures import ThreadPoolExecutor
 
-def scan_for_itm_deals(ticker_symbol):
-    print(f"--- 🕵️ Scanning {ticker_symbol} for the Best Deals ---")
-    
-    # 1. Get Stock Info
-    stock = yf.Ticker(ticker_symbol)
+# --- APP CONFIGURATION ---
+st.set_page_config(page_title="JuiceBox Ultra", page_icon="💎", layout="wide")
+
+# Premium CSS Styling
+st.markdown("""
+<style>
+    .premium-header {
+        background: linear-gradient(90deg, #0f172a 0%, #334155 100%);
+        color: white; padding: 20px; border-radius: 15px; margin-bottom: 25px;
+    }
+    .card { 
+        border: none; border-radius: 15px; background: white; 
+        padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-top: 5px solid #3b82f6;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- UTILITY FUNCTIONS ---
+@st.cache_data(ttl=3600)
+def get_market_sentiment():
     try:
-        current_price = stock.fast_info['last_price']
-    except:
-        return "Error: Could not find that stock. Check the symbol!"
+        data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1d", progress=False)['Close']
+        spy_ch = ((data["^GSPC"].iloc[-1] - data["^GSPC"].iloc[-2]) / data["^GSPC"].iloc[-2]) * 100
+        vix_v = data["^VIX"].iloc[-1]
+        return spy_ch, vix_v
+    except: return 0.0, 0.0
 
-    # 2. Pick an Expiration Date (Looking ~30 days out is usually best)
-    expiry_dates = stock.options
-    if not expiry_dates:
-        return "No options found."
-    
-    # We'll use the first available date for this example
-    target_expiry = expiry_dates[0]
-    chain = stock.option_chain(target_expiry)
-    calls = chain.calls
+def run_backtest(ticker, target_roi):
+    hist = yf.download(ticker, period="1y", interval="1d", progress=False)
+    if hist.empty: return None
+    weekly_premium = target_roi / 100 
+    hist['Returns'] = hist['Close'].pct_change()
+    hist['Strategy_Returns'] = np.where(hist['Returns'] > weekly_premium, weekly_premium, hist['Returns'] + weekly_premium)
+    hist['Cum_Stock'] = (1 + hist['Returns']).cumprod() * 100
+    hist['Cum_Strategy'] = (1 + hist['Strategy_Returns']).cumprod() * 100
+    return hist
 
-    # 3. Filter for 'In-the-Money' (Strike Price < Current Price)
-    # This means the deal is already "started"
-    itm_deals = calls[calls['strike'] < current_price].copy()
+# --- MAIN UI ---
+spy_ch, v_vix = get_market_sentiment()
 
-    # --- THE BRAINS OF THE STRATEGY ---
-    
-    # Break-Even: Price of stock - Cash friend gives you
-    itm_deals['break_even'] = current_price - itm_deals['bid']
-    
-    # Safety Net: How much can the stock drop before we lose money?
-    itm_deals['safety_net_$'] = current_price - itm_deals['break_even']
-    
-    # The Profit: If the stock stays above the strike price
-    itm_deals['max_profit_$'] = (itm_deals['strike'] + itm_deals['bid']) - current_price
-    
-    # Allowance Score: What is our profit % for this month?
-    itm_deals['allowance_%'] = (itm_deals['max_profit_$'] / current_price) * 100
+st.markdown(f"""
+<div class="premium-header">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="margin:0;">JuiceBox Ultra | S&P 500: {spy_ch:+.2f}%</h2>
+        <h3 style="margin:0;">VIX: {v_vix:.2f}</h3>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-    # 4. THE GRADING SYSTEM (Middle School Edition)
-    def assign_grade(row):
-        if row['allowance_%'] > 3: return "💎 A+ (High Reward)"
-        if row['allowance_%'] > 1.5: return "✅ B (Solid Deal)"
-        if row['allowance_%'] > 0: return "⚠️ C (Low Reward)"
-        return "❌ F (Bad Deal)"
+# Sidebar Controls
+with st.sidebar:
+    st.title("🛡️ Pro Controls")
+    is_premium = st.toggle("Unlock Premium Tier")
+    strategy = st.selectbox("Strategy", ["Covered Call", "Cash Secured Put"])
+    income_goal = st.number_input("Monthly Income Goal ($)", value=2000)
 
-    itm_deals['Grade'] = itm_deals.apply(assign_grade, axis=1)
+# Backtester Section
+st.subheader("🧪 Alpha Backtest Engine")
+col1, col2 = st.columns([1, 2])
 
-    # 5. Clean up the view
-    final_list = itm_deals[['strike', 'bid', 'safety_net_$', 'allowance_%', 'Grade']]
-    
-    # Sort to show the best grades at the top
-    return final_list.sort_values(by='allowance_%', ascending=False)
+with col1:
+    st.write("Analyze historical performance vs. Buy & Hold.")
+    bt_ticker = st.text_input("Ticker", value="SPY")
+    bt_roi = st.slider("Target Weekly ROI %", 0.5, 3.0, 1.2)
+    run_bt = st.button("RUN HISTORY TEST")
 
-# --- EXECUTE SCAN ---
-# Let's try it with a popular stock!
-print(scan_for_itm_deals("AAPL").head(10))
+if run_bt:
+    bt_data = run_backtest(bt_ticker, bt_roi)
+    if bt_data is not None:
+        with col2:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=bt_data.index, y=bt_data['Cum_Strategy'], name="Juice Strategy", line=
