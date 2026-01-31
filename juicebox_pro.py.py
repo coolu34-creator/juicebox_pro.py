@@ -53,12 +53,12 @@ def get_market_sentiment():
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# Fix: Define these before the UI renders to prevent NameError
+# Fix: Define these before they are called in UI
 status_text, status_class = get_market_status()
-spy_ch, v_vix, s_c = get_market_sentiment()
+spy_ch, vix_v, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (Fixes Syntax & KeyErrors)
+# 3. SCANNER ENGINE (Fixes KeyError)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -103,7 +103,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     basis = price - premium if strategy_type != "Cash Secured Put" else float(match["strike"]) - premium
                     roi = (juice / basis) * 100
                     
-                    # Contracts Calculation
+                    # Target income logic
                     juice_per_contract = juice * 100
                     contracts_needed = int(np.ceil(income_goal / juice_per_contract)) if juice_per_contract > 0 else 0
                     
@@ -111,16 +111,10 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
                     return {
-                        "Status": "🟢" if roi > 1.2 else "🟡",
-                        "Ticker": t,
-                        "Price": round(price, 2),
-                        "Strike": float(match["strike"]),
-                        "Premium ($)": round(premium * 100, 2),
-                        "Juice ($)": round(juice_per_contract, 2),
-                        "ROI %": round(roi, 2),
-                        "Expiry": exp,
-                        "OI": int(match["openInterest"]),
-                        "Contracts": contracts_needed
+                        "Status": "🟢" if roi > 1.2 else "🟡", "Ticker": t, "Price": round(price, 2),
+                        "Strike": float(match["strike"]), "Premium ($)": round(premium * 100, 2),
+                        "Juice ($)": round(juice_per_contract, 2), "ROI %": round(roi, 2), "Expiry": exp,
+                        "OI": int(match["openInterest"]), "Contracts": contracts_needed
                     }
     except: return None
 
@@ -130,18 +124,18 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
 st.markdown(f"""
 <div class="sentiment-bar">
     <span class="status-tag {status_class}">{status_text}</span>
-    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {v_vix:.2f}</div>
+    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {vix_v:.2f}</div>
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
     st.subheader("💰 Progress Tracker")
-    income_goal = st.number_input("Target Income Goal ($)", value=2000)
+    income_goal = st.number_input("Target Income ($)", value=2000)
     
     st.divider()
     st.subheader("🛡️ Filters")
     min_oi = st.number_input("Min Open Interest", value=500)
-    max_stock_price = st.slider("Max Stock Price ($)", 10, 100, 100)
+    max_stock_price = st.slider("Max Price ($)", 10, 100, 100)
     only_positive = st.checkbox("Healthy Companies Only", value=True)
     
     st.divider()
@@ -166,6 +160,6 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     
-    # Selection matching the display cols to avoid KeyError
-    display_cols = ["Status", "Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Contracts", "Expiry", "OI"]
+    # Fix: Ensure columns match exactly to avoid KeyError
+    display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Contracts", "Expiry", "OI"]
     st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
