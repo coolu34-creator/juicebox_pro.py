@@ -34,19 +34,20 @@ st.markdown("""
     .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
     .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
     .dot-red { background-color: #dc2626; box-shadow: 0 0 10px #dc2626; }
-    .legend-box { background-color: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES
+# 2. MARKET DATA UTILITIES (Fixes NameError: v_v)
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
     now = datetime.now(tz)
     is_weekday = now.weekday() < 5
     m_open, m_close = time(9, 30), time(16, 0)
-    return ("Market Open", "status-open") if is_weekday and m_open <= now.time() <= m_close else ("Market Closed", "status-closed")
+    if is_weekday and m_open <= now.time() <= m_close:
+        return "Market Open", "status-open"
+    return "Market Closed", "status-closed"
 
 def get_market_sentiment():
     try:
@@ -58,11 +59,12 @@ def get_market_sentiment():
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
     except: return 0.0, 0.0, "#fff", "#fff"
 
+# CRITICAL: Define these before the UI starts
 status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE & ENGINE
+# 3. UNIVERSE DEFINITION
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -73,6 +75,9 @@ TICKER_MAP = {
     "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
+# -------------------------------------------------
+# 4. SCANNER LOGIC (Fixes SyntaxError)
+# -------------------------------------------------
 def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
     try:
         stock = yf.Ticker(t)
@@ -125,13 +130,13 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
     except: return None
 
 # -------------------------------------------------
-# 4. MAIN INTERFACE
+# 5. UI RENDERING
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
     <span class="status-tag {status_class}">{status_text}</span>
     <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX (Fear Index): <span style="color:{v_c}">{vix_v:.2f}</span></span>
+    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -144,12 +149,11 @@ with st.expander("📖 JUICEBOX LEGEND - Read This First!"):
     Imagine you are a landlord. You own a house (the Stock) and you are collecting rent (the Juice).
     
     * **🧃 Juice:** This is your "Rent Money." It's the profit you get to keep just for waiting.
-    * **🟢 Status Dots:** * **Green:** Great rent! You are getting a lot of money for a little bit of time.
+    * **🟢 Status Dots:** * **Green:** Great rent! You are getting a lot of money.
         * **Yellow:** Good rent. It's a fair deal.
-        * **Red:** Low rent. You might be working too hard for too little money.
-    * **🛡️ Cushion:** This is your "Safety Net." If the stock price falls, this is how much it can drop before you start losing your own money.
-    * **📅 Earnings Alert:** This means the company is about to share its "Report Card." The stock might jump up or down like a pogo stick, so be careful!
-    * **📉 Net Basis:** This is the "Real Price" you paid for the stock after you subtract the rent you collected.
+        * **Red:** Low rent. You might be working too hard for too little.
+    * **🛡️ Cushion:** This is your "Safety Net." It's how much the price can fall before you lose money.
+    * **📅 Earnings Alert:** The company is about to share its "Report Card." The stock might jump like a pogo stick!
     """)
 
 with st.sidebar:
@@ -171,7 +175,8 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
-if "results" in st.session_state:
+# Fixes KeyError by ensuring results exist before creating the dataframe
+if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
     sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
@@ -186,3 +191,5 @@ if "results" in st.session_state:
             components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
         with c2:
             st.markdown(f'<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>Return: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Earnings: {row["E-Date"]}</div>', unsafe_allow_html=True)
+else:
+    st.info("Click 'RUN GLOBAL SCAN' above to start harvesting.")
