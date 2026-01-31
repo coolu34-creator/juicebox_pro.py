@@ -34,10 +34,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET SENTIMENT FETCH
+# 2. MARKET SENTIMENT FETCH (Defined & Called Early)
 # -------------------------------------------------
 def get_market_sentiment():
     try:
+        # Fetching S&P 500 and VIX
         data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1h", progress=False)['Close']
         if data.empty or len(data) < 2:
             return 0.0, 0.0, "#ffffff", "#ffffff"
@@ -45,7 +46,7 @@ def get_market_sentiment():
         spy_now = data["^GSPC"].iloc[-1]
         spy_prev = data["^GSPC"].iloc[-2]
         
-        # Prevent nan error
+        # Prevent nan error for display
         if np.isnan(spy_now) or np.isnan(spy_prev) or spy_prev == 0:
             spy_ch = 0.0
         else:
@@ -58,6 +59,7 @@ def get_market_sentiment():
     except:
         return 0.0, 0.0, "#ffffff", "#ffffff"
 
+# CRITICAL: Call this before the UI rendering starts
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
@@ -126,18 +128,23 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
                 if match is not None and net_basis > 0:
                     roi = (juice / net_basis) * 100
                     dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
-                    # Syntax fixed here
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
-                        "Dot": dot_style, "Ticker": t, "Earnings": e_alert, "E-Date": next_e,
-                        "Price": round(price, 2), "Strike": match["strike"],
-                        "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
-                        "Expiry": exp, "Net Basis": round(net_basis, 2)
+                        "Dot": dot_style, 
+                        "Ticker": t, 
+                        "Earnings": e_alert, 
+                        "E-Date": next_e,
+                        "Price": round(price, 2), 
+                        "Strike": match["strike"],
+                        "Juice ($)": round(juice * 100, 2), 
+                        "ROI %": round(roi, 2),
+                        "Expiry": exp, 
+                        "Net Basis": round(net_basis, 2)
                     }
     except: return None
 
 # -------------------------------------------------
-# 5. SIDEBAR & SCAN
+# 5. SIDEBAR & SCAN EXECUTION
 # -------------------------------------------------
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
@@ -145,24 +152,27 @@ with st.sidebar:
     capital = st.number_input("Capital ($)", value=10000)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     sectors = st.multiselect("Sectors", options=list(TICKER_MAP.keys()), default=["Market ETFs", "Leveraged (3x/2x)"])
-    max_days = st.slider("Max Days", 7, 45, 21)
-    min_cushion = st.slider("Cushion %", 0, 15, 5)
+    max_days = st.slider("Max Days to Expiry", 7, 45, 21)
+    min_cushion = st.slider("Cushion % (Safety)", 0, 15, 5)
     st.divider()
-    st.error("⚖️ LEGAL: No financial advice.")
+    st.error("⚖️ LEGAL DISCLAIMER: No financial advice provided.")
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Scanning..."):
+    with st.spinner(f"Scanning {len(univ)} tickers..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
-if "results" in st.session_state:
+if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
-    sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    
+    # Render the data table
+    sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
+                       use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
         row = df.iloc[sel.selection.rows[0]]
@@ -172,4 +182,4 @@ if "results" in st.session_state:
             cid = f"tv_{row['Ticker']}"
             components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
         with c2:
-            st.markdown(f'<div class="card"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>ROI: {row["ROI %"]}%<br>Earnings: {row["E-Date"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="card"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>ROI: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Expiry: {row["Expiry"]}<br>Earnings: {row["E-Date"]}</div>', unsafe_allow_html=True)
