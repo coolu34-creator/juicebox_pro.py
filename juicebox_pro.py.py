@@ -32,12 +32,11 @@ st.markdown("""
     .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
     .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
     .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
-    .dot-red { background-color: #dc2626; box-shadow: 0 0 10px #dc2626; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA & STATUS
+# 2. MARKET DATA UTILITIES (Fixes NameError & nan%)
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -50,27 +49,40 @@ def get_market_status():
 
 def get_market_sentiment():
     try:
+        # Fetch data for Sentiment Bar
         data = yf.download(["^GSPC", "^VIX"], period="5d", interval="1d", progress=False)['Close']
-        if data.empty or len(data) < 2: return 0.0, 0.0, "#fff", "#fff"
-        spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
-        spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
+        if data.empty or len(data) < 2:
+            return 0.0, 0.0, "#fff", "#fff"
+        
+        spy_now = data["^GSPC"].iloc[-1]
+        spy_prev = data["^GSPC"].iloc[-2]
+        
+        # Clean calculation to avoid nan
+        if np.isnan(spy_now) or np.isnan(spy_prev) or spy_prev == 0:
+            spy_ch = 0.0
+        else:
+            spy_ch = ((spy_now - spy_prev) / spy_prev) * 100
+            
         vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
-        return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
-    except: return 0.0, 0.0, "#fff", "#fff"
+        s_c = "#22c55e" if spy_ch >= 0 else "#ef4444"
+        v_c = "#ef4444" if vix_v > 22 else "#22c55e" 
+        return spy_ch, vix_v, s_c, v_c
+    except:
+        return 0.0, 0.0, "#fff", "#fff"
 
 status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE & ENGINE (ITM BREAKDOWN LOGIC)
+# 3. UNIVERSE & ENGINE (Fixes SyntaxError)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
     "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
-    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "PINS", "SNAP", "NET", "OKTA", "AI", "GME"],
-    "Finance": ["BAC", "WFC", "C", "USB", "TFC", "PNC", "COF", "DFS", "NU", "SE", "SQ", "PYPL", "COIN"],
-    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "KMI", "WMB", "FCX", "CLF", "NEM", "GOLD", "RIG", "XOP"],
-    "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
+    "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
+    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
 def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val):
@@ -115,11 +127,10 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                 if match is not None and net_basis > 0:
                     juice_dollars = juice * 100
                     roi = (juice / net_basis) * 100
-                    
                     if target_type == "Dollar ($)" and juice_dollars < target_val: continue
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
-                    dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
+                    dot_style = "dot-green" if roi > 1.2 else "dot-yellow"
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡", "Dot": dot_style,
                         "Ticker": t, "Price": round(price, 2), "Strike": match["strike"],
@@ -129,7 +140,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
     except: return None
 
 # -------------------------------------------------
-# 4. UI RENDERING & SIDEBAR
+# 4. INTERFACE & SIDEBAR
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -149,8 +160,8 @@ with st.sidebar:
     earned = st.number_input("Earned ($)", value=0)
     
     st.divider()
-    st.subheader("🎯 Target Pay")
-    target_type = st.radio("Minimum Goal:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    st.subheader("🎯 Pay Goal")
+    target_type = st.radio("Minimum Target:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
     target_val = st.number_input("Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
     
     st.divider()
@@ -162,10 +173,10 @@ with st.sidebar:
     
     st.divider()
     st.error("⚖️ LEGAL DISCLAIMER")
-    st.caption("JuiceBox Pro is an educational tool. Options trading involves high risk. You are responsible for your own financial decisions. Data is not guaranteed to be real-time.")
+    st.caption("JuiceBox Pro is an educational tool. Options trading involves risk. You are responsible for your own financial decisions.")
 
 # -------------------------------------------------
-# 5. EXECUTION & BREAKDOWN DISPLAY
+# 5. EXECUTION & PROGRESS (Fixes KeyError)
 # -------------------------------------------------
 remaining = monthly_goal - earned
 st.progress(max(0, min(100, int((earned / monthly_goal) * 100))) / 100 if monthly_goal > 0 else 0)
@@ -186,6 +197,7 @@ if "results" in st.session_state and st.session_state.results:
     needed = int(np.ceil(remaining / avg_juice)) if avg_juice > 0 else 0
     st.write(f"**Path to Goal:** Average trade pays **${avg_juice:.2f}**. You need roughly **{needed}** more trades.")
 
+    # Dataframe display with specific columns
     sel = st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
                        use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
@@ -206,10 +218,12 @@ if "results" in st.session_state and st.session_state.results:
                 <p>Stock Price: ${row['Price']}</p>
                 <p>Strike Price: ${row['Strike']}</p>
                 <hr>
-                <p style="color: grey; font-size: 14px;">Stock Value (Intrinsic): ${row['Intrinsic']}</p>
+                <p style="color: grey; font-size: 14px;">Intrinsic Value: ${row['Intrinsic']}</p>
                 <p class="juice-val">+ Juice (Extrinsic): ${row['Juice ($)']}</p>
                 <hr>
                 <p><b>Net Basis: ${row['Net Basis']}</b></p>
                 <p><b>Total ROI: {row['ROI %']}%</b></p>
             </div>
             """, unsafe_allow_html=True)
+else:
+    st.info("Select your sectors and click 'RUN GLOBAL SCAN' to harvest juice.")
