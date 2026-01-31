@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA (Fixes NameError & nan%)
+# 2. MARKET DATA UTILITIES (Fixes NameError & nan%)
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -63,41 +63,7 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UI RENDERING & PROGRESS TRACKER
-# -------------------------------------------------
-st.markdown(f"""
-<div class="sentiment-bar">
-    <span class="status-tag {status_class}">{status_text}</span>
-    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
-</div>
-""", unsafe_allow_html=True)
-
-st.title("🧃 JuiceBox Pro")
-
-with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
-    
-    st.subheader("💰 Monthly Income Goal")
-    monthly_goal = st.number_input("Goal ($)", value=2000, step=100)
-    current_earned = st.number_input("Earned So Far ($)", value=0, step=50)
-    
-    st.divider()
-    st.subheader("🎯 Pay Goal")
-    target_type = st.radio("I want to make at least:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input(f"Min {target_type}", value=50.0 if target_type == "Dollar ($)" else 1.0)
-    
-    st.divider()
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
-    max_days = st.slider("Days Away", 7, 45, 21)
-    min_cushion = st.slider("Safety %", 0, 15, 5)
-    
-    st.divider()
-    st.error("⚖️ LEGAL DISCLAIMER")
-    st.caption("This app is for educational purposes only. Options trading involves risk. You are responsible for your own financial decisions.")
-
-# -------------------------------------------------
-# 4. UNIVERSE & SCANNER ENGINE
+# 3. UNIVERSE DEFINITION
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -108,6 +74,9 @@ TICKER_MAP = {
     "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
+# -------------------------------------------------
+# 4. SCANNER LOGIC
+# -------------------------------------------------
 def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val):
     try:
         stock = yf.Ticker(t)
@@ -156,17 +125,52 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
     except: return None
 
 # -------------------------------------------------
-# 5. EXECUTION & DISPLAY (Fixes KeyError)
+# 5. UI & SIDEBAR SECTORS
+# -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
+    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
+</div>
+""", unsafe_allow_html=True)
+
+st.title("🧃 JuiceBox Pro")
+
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
+    
+    st.subheader("💰 Monthly Income Goal")
+    monthly_goal = st.number_input("Goal ($)", value=2000, step=100)
+    current_earned = st.number_input("Earned So Far ($)", value=0, step=50)
+    
+    st.divider()
+    st.subheader("🎯 Pay Goal")
+    target_type = st.radio("I want to make at least:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input(f"Min Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    
+    st.divider()
+    st.subheader("📂 Market Sectors")
+    all_sectors = list(TICKER_MAP.keys())
+    sectors = st.multiselect("Pick Sectors to Scan:", options=all_sectors, default=all_sectors)
+    
+    st.divider()
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
+    max_days = st.slider("Days Away", 7, 45, 21)
+    min_cushion = st.slider("Safety %", 0, 15, 5)
+
+# -------------------------------------------------
+# 6. EXECUTION & PROGRESS
 # -------------------------------------------------
 remaining = monthly_goal - current_earned
 st.progress(max(0, min(100, int((current_earned / monthly_goal) * 100))) / 100 if monthly_goal > 0 else 0)
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
-    for s in TICKER_MAP.values(): univ.extend(s)
+    for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
     with st.spinner("Harvesting data..."):
-        with ThreadPoolExecutor(max_workers=20) as ex:
+        with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
@@ -194,4 +198,4 @@ if "results" in st.session_state and st.session_state.results:
         with col2:
             st.markdown(f'<div class="card"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>Return: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Expiry: {row["Expiry"]}</div>', unsafe_allow_html=True)
 else:
-    st.info("Click 'RUN GLOBAL SCAN' to see results.")
+    st.info("Select your sectors and click 'RUN GLOBAL SCAN' to harvest juice.")
