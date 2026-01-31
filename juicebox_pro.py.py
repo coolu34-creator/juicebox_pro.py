@@ -8,7 +8,7 @@ import pytz
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
-# 1. MOBILE-FIRST APP SETUP
+# 1. APP SETUP & BRANDING
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
@@ -31,7 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Persistent State for Tracking
+# Session State
 if 'total_earned' not in st.session_state: st.session_state.total_earned = 0.0
 if 'trade_log' not in st.session_state: st.session_state.trade_log = []
 
@@ -57,12 +57,11 @@ def get_market_sentiment():
         return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# Pre-define to prevent app crashes on first load
 status_text, status_class = get_market_status()
 spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (Fixes KeyErrors & Price Cap)
+# 3. SCANNER ENGINE (Cushion & DTE Restored)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -78,7 +77,6 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
         stock = yf.Ticker(t)
         info = stock.info
         price = info.get('currentPrice') or info.get('regularMarketPrice')
-        
         if not price or price > max_price: return None
         
         if only_positive:
@@ -86,17 +84,20 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
             if (eps is not None and eps < 0) or (margin is not None and margin < 0): return None
 
         for exp in stock.options[:3]:
-            days = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
-            if 4 <= days <= max_days:
+            dte = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
+            if 4 <= dte <= max_days:
                 chain = stock.option_chain(exp)
                 match = None
                 
                 if strategy_type == "Deep ITM Covered Call":
+                    # RESTORED CUSHION FILTER
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100)) & (chain.calls["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
+                
                 elif strategy_type == "Standard OTM Covered Call":
                     df = chain.calls[(chain.calls["strike"] > price * 1.01) & (chain.calls["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=True).iloc[0]
+                
                 elif strategy_type == "Cash Secured Put":
                     df = chain.puts[(chain.puts["strike"] < price * (1 - min_cushion/100)) & (chain.puts["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
@@ -108,7 +109,8 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     basis = price - premium if strategy_type != "Cash Secured Put" else float(match["strike"]) - premium
                     roi = (juice / basis) * 100
                     
-                    # Contracts Needed Calculation
+                    # CUSHION CALCULATION
+                    cushion_pct = ((price - basis) / price) * 100
                     juice_per_contract = juice * 100
                     contracts_needed = int(np.ceil(income_goal / juice_per_contract)) if juice_per_contract > 0 else 0
                     
@@ -118,13 +120,13 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡", "Ticker": t, "Price": round(price, 2),
                         "Strike": float(match["strike"]), "Juice ($)": round(juice_per_contract, 2),
-                        "ROI %": round(roi, 2), "Contracts": contracts_needed, "Expiry": exp,
-                        "OI": int(match["openInterest"]), "Intrinsic": round(intrinsic * 100, 2), "Net Basis": round(basis, 2)
+                        "ROI %": round(roi, 2), "Cushion %": round(cushion_pct, 2), "DTE": dte,
+                        "Contracts": contracts_needed, "Expiry": exp, "Basis": round(basis, 2)
                     }
     except: return None
 
 # -------------------------------------------------
-# 4. MOBILE INTERFACE
+# 4. INTERFACE & UI (Fixes KeyError)
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -135,14 +137,15 @@ st.markdown(f"""
 
 with st.sidebar:
     st.subheader("💰 Monthly Tracker")
-    income_goal = st.number_input("Target Income Goal ($)", value=2000)
+    income_goal = st.number_input("Target Goal ($)", value=2000)
     st.metric("Earned So Far", f"${st.session_state.total_earned:,.2f}")
     
     st.divider()
     st.subheader("🛡️ Safety Filters")
+    min_cushion = st.slider("Min Cushion %", 0, 20, 5) # RESTORED
+    max_days = st.slider("Max DTE (Days)", 7, 60, 30) # RESTORED
+    max_stock_price = st.slider("Max Price ($)", 10, 100, 100)
     min_oi = st.number_input("Min Open Interest", value=500)
-    max_stock_price = st.slider("Max Stock Price ($)", 10, 100, 100)
-    only_positive = st.checkbox("Healthy Only", value=True)
     
     st.divider()
     target_type = st.radio("Pay Goal:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
@@ -152,25 +155,22 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 5. EXECUTION & RESULTS (WITH CHART)
+# 5. EXECUTION & DISPLAY
 # -------------------------------------------------
-remaining = income_goal - st.session_state.total_earned
-st.progress(max(0, min(100, int((st.session_state.total_earned / income_goal) * 100))) / 100 if income_goal > 0 else 0)
-
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner("Harvesting juice..."):
+    with st.spinner("Harvesting safety and juice..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, 5, 21, target_type, target_val, max_stock_price, only_positive, min_oi, income_goal), univ) if r]
+            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val, max_stock_price, True, min_oi, income_goal), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     
-    # Table Display
-    display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Contracts", "Expiry"]
+    # Updated columns to avoid KeyError and show restored metrics
+    display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
@@ -178,22 +178,17 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            # INTERACTIVE CHART
             cid = f"tv_{row['Ticker']}"
-            components.html(f"""
-            <div id="{cid}" style="height:400px; width:100%;"></div>
-            <script src="https://s3.tradingview.com/tv.js"></script>
-            <script>new TradingView.widget({{"autosize": true, "symbol": "{row['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>
-            """, height=420)
+            components.html(f'<div id="{cid}" style="height:400px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=420)
         with c2:
             st.markdown(f"""
             <div class="card">
-                <b>{row['Ticker']} BREAKDOWN</b>
+                <b>{row['Ticker']} Safety Check</b>
                 <p class="juice-val">${row['Juice ($)']} Juice</p>
-                <p><b>Target:</b> {row['Contracts']} Contracts</p>
                 <hr>
-                <p>Stock Basis: ${row['Net Basis']}</p>
-                <p>Intrinsic Val: ${row['Intrinsic']}</p>
+                <p><b>Safety Cushion:</b> {row['Cushion %']}%</p>
+                <p><b>Days to Expiry:</b> {row['DTE']} days</p>
+                <p><b>Contracts Needed:</b> {row['Contracts']}</p>
             </div>
             """, unsafe_allow_html=True)
             if st.button(f"💾 LOG {row['Ticker']} AS DONE"):
