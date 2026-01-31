@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import numpy as np
 import pytz
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES
+# 2. AFTER-HOURS DATA LOGIC
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -51,11 +51,16 @@ def get_market_status():
 
 def get_market_sentiment():
     try:
-        data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1h", progress=False)['Close']
+        # Use a 4-day period to ensure we catch Friday's data if it is Sunday
+        data = yf.download(["^GSPC", "^VIX"], period="4d", interval="1d", progress=False)['Close']
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff", "#fff"
-        spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
+        
+        spy_now = data["^GSPC"].iloc[-1]
+        spy_prev = data["^GSPC"].iloc[-2]
+        
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
         vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
+        
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
     except: return 0.0, 0.0, "#fff", "#fff"
 
@@ -63,7 +68,29 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE & ENGINE
+# 3. THE 5TH GRADE LEGEND
+# -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
+    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
+
+with st.expander("📖 JUICEBOX LEGEND - 5th Grade Version"):
+    st.markdown("""
+    ### 🍎 How it Works
+    * **🧃 Juice:** This is your **Rent Money**. You collect this profit just for letting someone else reserve your stock.
+    * **🛡️ Cushion:** This is your **Safety Net**. It's like having a bumper on a car—the stock price can drop a little, and you'll still be okay!
+    * **📅 Earnings:** This is **Report Card Day**. Companies get graded, and their stock price can jump around a lot. Be careful!
+    * **🌙 After-Hours:** When the market is "Closed," we look at the last prices from the end of the day. It's like looking at a photo of the market from 4:00 PM.
+    """)
+
+# -------------------------------------------------
+# 4. UNIVERSE & SCANNER
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -77,17 +104,17 @@ TICKER_MAP = {
 def scan_ticker(t, strategy_type, min_cushion, max_days, capital, target_type, target_val):
     try:
         stock = yf.Ticker(t)
-        price = float(stock.fast_info["lastPrice"])
-        if not (2.0 <= price <= 100.0): return None
+        # Fetch fast info safely for after-hours
+        price = float(stock.history(period="1d")["Close"].iloc[-1])
+        if not (1.0 <= price <= 200.0): return None
         
         # Earnings check
-        next_e, e_alert = "N/A", ""
-        cal = stock.calendar
-        if cal is not None and 'Earnings Date' in cal:
-            e_date = cal['Earnings Date'][0]
-            next_e = e_date.strftime('%Y-%m-%d')
-            days_to_e = (e_date.replace(tzinfo=None) - datetime.now()).days
-            if 0 <= days_to_e <= 45: e_alert = "📅 ALERT"
+        next_e = "N/A"
+        try:
+            cal = stock.calendar
+            if cal is not None and 'Earnings Date' in cal:
+                next_e = cal['Earnings Date'][0].strftime('%Y-%m-%d')
+        except: pass
 
         for exp in stock.options[:3]:
             days = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
@@ -96,76 +123,53 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital, target_type, t
                 match, juice, net_basis = None, 0, 0
                 
                 if strategy_type == "Deep ITM Covered Call":
-                    df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100)) & (chain.calls["volume"] > 0)]
+                    df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100))]
                     if not df.empty:
                         match = df.sort_values("strike", ascending=False).iloc[0]
-                        juice = max(0, float(match["bid"]) - (price - float(match["strike"])))
-                        net_basis = price - float(match["bid"])
+                        juice = max(0, float(match["lastPrice"]) - (price - float(match["strike"])))
+                        net_basis = price - float(match["lastPrice"])
                 elif strategy_type == "Standard OTM Covered Call":
-                    df = chain.calls[(chain.calls["strike"] > price * 1.01) & (chain.calls["volume"] > 0)]
+                    df = chain.calls[(chain.calls["strike"] > price * 1.01)]
                     if not df.empty:
                         match = df.sort_values("strike", ascending=True).iloc[0]
-                        juice = float(match["bid"])
+                        juice = float(match["lastPrice"])
                         net_basis = price - juice
                 elif strategy_type == "Cash Secured Put":
-                    df = chain.puts[(chain.puts["strike"] < price * (1 - min_cushion/100)) & (chain.puts["volume"] > 0)]
+                    df = chain.puts[(chain.puts["strike"] < price * (1 - min_cushion/100))]
                     if not df.empty:
                         match = df.sort_values("strike", ascending=False).iloc[0]
-                        juice = float(match["bid"])
+                        juice = float(match["lastPrice"])
                         net_basis = float(match["strike"]) - juice
 
                 if match is not None and net_basis > 0:
                     juice_dollars = juice * 100
                     roi = (juice / net_basis) * 100
-                    
-                    # Filtering based on user goal
                     if target_type == "Dollar ($)" and juice_dollars < target_val: continue
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
                     dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
-                        "Dot": dot_style, "Ticker": t, "Earnings": e_alert, "E-Date": next_e,
-                        "Price": round(price, 2), "Strike": match["strike"],
-                        "Juice ($)": round(juice_dollars, 2), "ROI %": round(roi, 2),
-                        "Expiry": exp, "Net Basis": round(net_basis, 2)
+                        "Dot": dot_style, "Ticker": t, "Price": round(price, 2), 
+                        "Strike": match["strike"], "Juice ($)": round(juice_dollars, 2), 
+                        "ROI %": round(roi, 2), "Expiry": exp, "Net Basis": round(net_basis, 2),
+                        "Earnings": next_e
                     }
     except: return None
 
 # -------------------------------------------------
-# 4. MAIN INTERFACE
+# 5. SIDEBAR & RUN
 # -------------------------------------------------
-st.markdown(f"""
-<div class="sentiment-bar">
-    <span class="status-tag {status_class}">{status_text}</span>
-    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
-
-with st.expander("📖 JUICEBOX LEGEND"):
-    st.markdown("""
-    ### 🍎 Trading Made Simple
-    * **🧃 Juice:** Your profit. It's the "rent money" you collect for waiting.
-    * **🛡️ Cushion:** Your safety net. How much the price can fall before you lose money.
-    * **📅 Earnings:** The company report card. Be careful, prices jump during this time!
-    """)
-
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
     st.title("Control Panel")
     capital = st.number_input("Capital ($)", value=10000)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     
-    # NEW: TARGET GOAL LOGIC
-    st.divider()
     st.subheader("🎯 Pay Goal")
     target_type = st.radio("I want to make at least:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
     target_val = st.number_input(f"Minimum {target_type}", value=50.0 if target_type == "Dollar ($)" else 1.0)
     
-    st.divider()
     all_s = list(TICKER_MAP.keys())
     sectors = st.multiselect("Sectors", options=all_s, default=all_s)
     max_days = st.slider("Max Days", 7, 45, 21)
@@ -175,37 +179,11 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Harvesting premiums matching your ${target_val if target_type == 'Dollar ($)' else str(target_val)+'%'} goal..."):
+    with st.spinner("Harvesting data... (Even works while you sleep!)"):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
-    sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
-                       use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
-
-    if sel.selection.rows:
-        row = df.iloc[sel.selection.rows[0]]
-        st.divider()
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            cid = f"tv_{row['Ticker']}"
-            components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
-        with c2:
-            st.markdown(f"""
-            <div class="card">
-                <div style="display: flex; align-items: center; margin-bottom: 8px;">
-                    <span class="dot {row['Dot']}"></span>
-                    <b>{row['Ticker']} REPORT</b>
-                </div>
-                <p class="juice-val">${row['Juice ($)']} Juice</p>
-                <hr>
-                <b>Return:</b> {row['ROI %']}%<br>
-                <b>Cost Basis:</b> ${row['Net Basis']}<br>
-                <b>Earnings Date:</b> {row['E-Date']}
-            </div>
-            """, unsafe_allow_html=True)
-else:
-    st.info("No trades found matching your Pay Goal. Try lowering your target or checking more sectors.")
+    st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry", "Earnings"]], use_container_width=True, hide_index=True)
