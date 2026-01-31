@@ -28,8 +28,12 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; }
+    .projection-val { color: #3b82f6; font-weight: 800; font-size: 22px; }
 </style>
 """, unsafe_allow_html=True)
+
+# Session State for tracking
+if 'total_earned' not in st.session_state: st.session_state.total_earned = 0.0
 
 # -------------------------------------------------
 # 2. MARKET DATA UTILITIES (Fixes NameError)
@@ -49,15 +53,15 @@ def get_market_sentiment():
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff"
         spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
-        vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
-        return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444")
+        vix_val = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
+        return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
 status_text, status_class = get_market_status()
 spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (ATM Strategy Added)
+# 3. SCANNER ENGINE (Affordability & Projection Logic)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -68,16 +72,14 @@ TICKER_MAP = {
     "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
-def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val, max_price, only_positive, min_oi, income_goal):
+def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val, max_price, min_oi, account_balance):
     try:
         stock = yf.Ticker(t)
-        info = stock.info
-        price = info.get('currentPrice') or info.get('regularMarketPrice')
-        if not price or price > max_price: return None
+        price = stock.fast_info['lastPrice']
         
-        if only_positive:
-            eps, margin = info.get('forwardEps', 0), info.get('profitMargins', 0)
-            if (eps is not None and eps < 0) or (margin is not None and margin < 0): return None
+        # Affordability Check: Must afford at least 1 contract (100 shares)
+        if (price * 100) > account_balance: return None
+        if price > max_price: return None
 
         for exp in stock.options[:3]:
             dte = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
@@ -85,21 +87,15 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                 chain = stock.option_chain(exp)
                 match = None
                 
+                # Logic for ATM / ITM / Put
                 if strategy_type == "Deep ITM Covered Call":
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100)) & (chain.calls["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
-                
                 elif strategy_type == "ATM (At-the-Money)":
-                    # Targets the strike closest to current price
                     df = chain.calls[chain.calls["openInterest"] >= min_oi]
                     if not df.empty:
                         df["diff"] = abs(df["strike"] - price)
                         match = df.sort_values("diff").iloc[0]
-
-                elif strategy_type == "Standard OTM Covered Call":
-                    df = chain.calls[(chain.calls["strike"] > price * 1.01) & (chain.calls["openInterest"] >= min_oi)]
-                    if not df.empty: match = df.sort_values("strike", ascending=True).iloc[0]
-                
                 elif strategy_type == "Cash Secured Put":
                     df = chain.puts[(chain.puts["strike"] < price * (1 - min_cushion/100)) & (chain.puts["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
@@ -109,25 +105,27 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     intrinsic = max(0, price - float(match["strike"])) if float(match["strike"]) < price else 0
                     juice = (premium - intrinsic)
                     basis = price - premium if strategy_type != "Cash Secured Put" else float(match["strike"]) - premium
+                    
+                    # Purchasing Power Calculation
+                    cost_per_contract = basis * 100
+                    max_contracts = int(account_balance // cost_per_contract)
+                    total_juice_projection = (juice * 100) * max_contracts
                     roi = (juice / basis) * 100
                     
-                    cushion_pct = ((price - basis) / price) * 100
-                    juice_per_contract = juice * 100
-                    contracts_needed = int(np.ceil(income_goal / juice_per_contract)) if juice_per_contract > 0 else 0
-                    
-                    if target_type == "Dollar ($)" and juice_per_contract < target_val: continue
+                    if max_contracts == 0: return None
+                    if target_type == "Dollar ($)" and total_juice_projection < target_val: continue
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡", "Ticker": t, "Price": round(price, 2),
-                        "Strike": float(match["strike"]), "Juice ($)": round(juice_per_contract, 2),
-                        "ROI %": round(roi, 2), "Cushion %": round(cushion_pct, 2), "DTE": dte,
-                        "Contracts": contracts_needed, "Expiry": exp, "Basis": round(basis, 2)
+                        "Strike": float(match["strike"]), "Can Afford": f"{max_contracts} Contracts",
+                        "Total Juice ($)": round(total_juice_projection, 2), "ROI %": round(roi, 2),
+                        "Basis": round(basis, 2), "DTE": dte
                     }
     except: return None
 
 # -------------------------------------------------
-# 4. INTERFACE & UI
+# 4. MOBILE INTERFACE
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -137,55 +135,49 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.subheader("💰 Progress Tracker")
-    income_goal = st.number_input("Target Goal ($)", value=2000)
+    st.subheader("🏦 Client Affordability")
+    account_balance = st.number_input("Account Balance ($)", value=10000, step=1000)
     
     st.divider()
     st.subheader("🛡️ Safety Filters")
-    min_cushion = st.slider("Min Cushion %", 0, 20, 5)
-    max_days = st.slider("Max DTE (Days)", 7, 60, 30)
-    max_stock_price = st.slider("Max Price ($)", 10, 100, 100)
+    min_cushion = st.slider("Min Safety Cushion %", 0, 20, 5)
+    max_days = st.slider("Max Days (DTE)", 7, 60, 30)
     min_oi = st.number_input("Min Open Interest", value=500)
     
     st.divider()
-    target_type = st.radio("Pay Goal:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input("Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    st.subheader("🎯 Pay Goal")
+    target_type = st.radio("Minimum I must make:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input("Value", value=100.0 if target_type == "Dollar ($)" else 1.0)
     
     sectors = st.multiselect("Sectors", options=list(TICKER_MAP.keys()), default=list(TICKER_MAP.keys()))
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 5. EXECUTION & DISPLAY
+# 5. EXECUTION & PROJECTION
 # -------------------------------------------------
-if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
+if st.button("RUN ADVISORY SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner("Harvesting strategies..."):
+    with st.spinner(f"Finding what you can afford with ${account_balance}..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val, max_stock_price, True, min_oi, income_goal), univ) if r]
-        st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
+            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val, 100, min_oi, account_balance), univ) if r]
+        st.session_state.results = sorted(results, key=lambda x: x['Total Juice ($)'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
-    sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    st.dataframe(df[["Status", "Ticker", "Can Afford", "Total Juice ($)", "ROI %", "Price", "Basis", "DTE"]], 
+                 use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
-    if sel.selection.rows:
-        row = df.iloc[sel.selection.rows[0]]
-        st.divider()
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            cid = f"tv_{row['Ticker']}"
-            components.html(f'<div id="{cid}" style="height:400px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=420)
-        with c2:
-            st.markdown(f"""
-            <div class="card">
-                <b>{row['Ticker']} Strategy Card</b>
-                <p class="juice-val">${row['Juice ($)']} Juice</p>
-                <hr>
-                <p><b>Cushion:</b> {row['Cushion %']}%</p>
-                <p><b>DTE:</b> {row['DTE']} days</p>
-                <p><b>Required:</b> {row['Contracts']} Contracts</p>
-            </div>
-            """, unsafe_allow_html=True)
+    if st.session_state.get("selection") and st.session_state.selection.rows:
+        row = df.iloc[st.session_state.selection.rows[0]]
+        st.markdown(f"""
+        <div class="card">
+            <b>{row['Ticker']} Advisory Report</b>
+            <p>Based on your ${account_balance} balance:</p>
+            <p class="projection-val">You can make ${row['Total Juice ($)']} Juice</p>
+            <hr>
+            <p><b>Quantity:</b> {row['Can Afford']}</p>
+            <p><b>Cost to Open:</b> ${round(row['Basis'] * 100, 2)} per contract</p>
+        </div>
+        """, unsafe_allow_html=True)
