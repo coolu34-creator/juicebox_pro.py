@@ -32,7 +32,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Session State for tracking
+# Persistent State
 if 'total_earned' not in st.session_state: st.session_state.total_earned = 0.0
 
 # -------------------------------------------------
@@ -57,11 +57,12 @@ def get_market_sentiment():
         return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
+# Pre-defined to prevent app crashes on load
 status_text, status_class = get_market_status()
 spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (Affordability & Projection Logic)
+# 3. SCANNER ENGINE (Affordability & Cushion)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -72,12 +73,12 @@ TICKER_MAP = {
     "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
-def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val, max_price, min_oi, account_balance):
+def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val, max_price, only_positive, min_oi, income_goal, account_balance):
     try:
         stock = yf.Ticker(t)
         price = stock.fast_info['lastPrice']
         
-        # Affordability Check: Must afford at least 1 contract (100 shares)
+        # Affordability & Price Caps
         if (price * 100) > account_balance: return None
         if price > max_price: return None
 
@@ -87,7 +88,6 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                 chain = stock.option_chain(exp)
                 match = None
                 
-                # Logic for ATM / ITM / Put
                 if strategy_type == "Deep ITM Covered Call":
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100)) & (chain.calls["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
@@ -106,26 +106,28 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     juice = (premium - intrinsic)
                     basis = price - premium if strategy_type != "Cash Secured Put" else float(match["strike"]) - premium
                     
-                    # Purchasing Power Calculation
+                    # Projections & Affordability
                     cost_per_contract = basis * 100
-                    max_contracts = int(account_balance // cost_per_contract)
-                    total_juice_projection = (juice * 100) * max_contracts
+                    can_afford = int(account_balance // cost_per_contract)
+                    juice_per_contract = juice * 100
+                    total_juice = juice_per_contract * can_afford
                     roi = (juice / basis) * 100
+                    cushion = ((price - basis) / price) * 100
                     
-                    if max_contracts == 0: return None
-                    if target_type == "Dollar ($)" and total_juice_projection < target_val: continue
+                    if can_afford == 0: return None
+                    if target_type == "Dollar ($)" and total_juice < target_val: continue
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡", "Ticker": t, "Price": round(price, 2),
-                        "Strike": float(match["strike"]), "Can Afford": f"{max_contracts} Contracts",
-                        "Total Juice ($)": round(total_juice_projection, 2), "ROI %": round(roi, 2),
-                        "Basis": round(basis, 2), "DTE": dte
+                        "Strike": float(match["strike"]), "Can Afford": can_afford, 
+                        "Total Juice ($)": round(total_juice, 2), "ROI %": round(roi, 2),
+                        "Cushion %": round(cushion, 2), "DTE": dte, "Basis": round(basis, 2)
                     }
     except: return None
 
 # -------------------------------------------------
-# 4. MOBILE INTERFACE
+# 4. INTERFACE
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -136,16 +138,17 @@ st.markdown(f"""
 
 with st.sidebar:
     st.subheader("🏦 Client Affordability")
-    account_balance = st.number_input("Account Balance ($)", value=10000, step=1000)
+    account_balance = st.number_input("Account Balance ($)", value=10000)
+    income_goal = st.number_input("Monthly Income Goal ($)", value=2000)
     
     st.divider()
     st.subheader("🛡️ Safety Filters")
-    min_cushion = st.slider("Min Safety Cushion %", 0, 20, 5)
-    max_days = st.slider("Max Days (DTE)", 7, 60, 30)
+    min_cushion = st.slider("Min Cushion %", 0, 20, 5)
+    max_days = st.slider("Max DTE", 7, 60, 30)
+    max_stock_price = st.slider("Max Price ($)", 10, 100, 100)
     min_oi = st.number_input("Min Open Interest", value=500)
     
     st.divider()
-    st.subheader("🎯 Pay Goal")
     target_type = st.radio("Minimum I must make:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
     target_val = st.number_input("Value", value=100.0 if target_type == "Dollar ($)" else 1.0)
     
@@ -153,31 +156,41 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 5. EXECUTION & PROJECTION
+# 5. EXECUTION & DISPLAY (Fixes KeyError)
 # -------------------------------------------------
 if st.button("RUN ADVISORY SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Finding what you can afford with ${account_balance}..."):
+    with st.spinner("Harvesting affordability data..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val, 100, min_oi, account_balance), univ) if r]
+            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val, max_stock_price, True, min_oi, income_goal, account_balance), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['Total Juice ($)'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.dataframe(df[["Status", "Ticker", "Can Afford", "Total Juice ($)", "ROI %", "Price", "Basis", "DTE"]], 
-                 use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    
+    # Selection matching the display cols to avoid KeyError
+    display_cols = ["Status", "Ticker", "Can Afford", "Total Juice ($)", "ROI %", "Cushion %", "DTE", "Price", "Basis"]
+    sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
-    if st.session_state.get("selection") and st.session_state.selection.rows:
-        row = df.iloc[st.session_state.selection.rows[0]]
-        st.markdown(f"""
-        <div class="card">
-            <b>{row['Ticker']} Advisory Report</b>
-            <p>Based on your ${account_balance} balance:</p>
-            <p class="projection-val">You can make ${row['Total Juice ($)']} Juice</p>
-            <hr>
-            <p><b>Quantity:</b> {row['Can Afford']}</p>
-            <p><b>Cost to Open:</b> ${round(row['Basis'] * 100, 2)} per contract</p>
-        </div>
-        """, unsafe_allow_html=True)
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            # RESTORED: Interactive TradingView Chart
+            cid = f"tv_{row['Ticker']}"
+            components.html(f'<div id="{cid}" style="height:400px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=420)
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+                <b>{row['Ticker']} Advisory Report</b>
+                <p>Based on your balance:</p>
+                <p class="projection-val">You can make ${row['Total Juice ($)']} Juice</p>
+                <hr>
+                <p><b>Quantity:</b> {row['Can Afford']} Contracts</p>
+                <p><b>DTE:</b> {row['DTE']} Days</p>
+                <p><b>Safety Cushion:</b> {row['Cushion %']}%</p>
+            </div>
+            """, unsafe_allow_html=True)
