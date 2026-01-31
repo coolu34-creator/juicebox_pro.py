@@ -2,8 +2,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, time
 import numpy as np
+import pytz
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
@@ -18,8 +19,13 @@ st.markdown("""
         background: #1e293b; color: white; padding: 12px; 
         border-radius: 12px; margin-bottom: 20px; 
         display: flex; justify-content: space-around; font-weight: 700; 
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); align-items: center;
     }
+    .status-tag {
+        padding: 4px 12px; border-radius: 20px; font-size: 12px; text-transform: uppercase;
+    }
+    .status-open { background-color: #16a34a; color: white; }
+    .status-closed { background-color: #dc2626; color: white; }
     .card { 
         border: 1px solid #e2e8f0; border-radius: 12px; background: white; 
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
@@ -34,32 +40,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET SENTIMENT FETCH (Defined & Called Early)
+# 2. MARKET STATUS & SENTIMENT
 # -------------------------------------------------
+def get_market_status():
+    tz = pytz.timezone('America/New_York')
+    now = datetime.now(tz)
+    is_weekday = now.weekday() < 5
+    market_open = time(9, 30)
+    market_close = time(16, 0)
+    
+    if is_weekday and market_open <= now.time() <= market_close:
+        return "Market Open", "status-open"
+    else:
+        return "Market Closed", "status-closed"
+
 def get_market_sentiment():
     try:
-        # Fetching S&P 500 and VIX
         data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1h", progress=False)['Close']
-        if data.empty or len(data) < 2:
-            return 0.0, 0.0, "#ffffff", "#ffffff"
-        
-        spy_now = data["^GSPC"].iloc[-1]
-        spy_prev = data["^GSPC"].iloc[-2]
-        
-        # Prevent nan error for display
-        if np.isnan(spy_now) or np.isnan(spy_prev) or spy_prev == 0:
-            spy_ch = 0.0
-        else:
-            spy_ch = ((spy_now - spy_prev) / spy_prev) * 100
-            
+        if data.empty or len(data) < 2: return 0.0, 0.0, "#fff", "#fff"
+        spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
+        spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
         vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
-        s_c = "#22c55e" if spy_ch >= 0 else "#ef4444"
-        v_c = "#ef4444" if vix_v > 22 else "#22c55e" 
-        return spy_ch, vix_v, s_c, v_c
-    except:
-        return 0.0, 0.0, "#ffffff", "#ffffff"
+        return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
+    except: return 0.0, 0.0, "#fff", "#fff"
 
-# CRITICAL: Call this before the UI rendering starts
+status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
@@ -67,6 +72,7 @@ spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
     <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
     <span>VIX (Fear Index): <span style="color:{v_c}">{vix_v:.2f}</span></span>
 </div>
@@ -75,12 +81,12 @@ st.markdown(f"""
 st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
 
 TICKER_MAP = {
-    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG"],
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
     "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
     "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "PINS", "SNAP", "NET", "OKTA"],
     "Finance": ["BAC", "WFC", "C", "USB", "TFC", "PNC", "COF", "DFS", "NU", "SE", "SQ", "PYPL", "COIN"],
     "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "KMI", "WMB", "FCX", "CLF", "NEM", "GOLD"],
-    "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT"]
+    "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT"]
 }
 
 # -------------------------------------------------
@@ -92,6 +98,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
         price = float(stock.fast_info["lastPrice"])
         if not (2.0 <= price <= 100.0): return None
         
+        # Earnings check
         next_e, e_alert = "N/A", ""
         cal = stock.calendar
         if cal is not None and 'Earnings Date' in cal:
@@ -130,21 +137,15 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
                     dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
-                        "Dot": dot_style, 
-                        "Ticker": t, 
-                        "Earnings": e_alert, 
-                        "E-Date": next_e,
-                        "Price": round(price, 2), 
-                        "Strike": match["strike"],
-                        "Juice ($)": round(juice * 100, 2), 
-                        "ROI %": round(roi, 2),
-                        "Expiry": exp, 
-                        "Net Basis": round(net_basis, 2)
+                        "Dot": dot_style, "Ticker": t, "Earnings": e_alert, "E-Date": next_e,
+                        "Price": round(price, 2), "Strike": match["strike"],
+                        "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
+                        "Expiry": exp, "Net Basis": round(net_basis, 2)
                     }
     except: return None
 
 # -------------------------------------------------
-# 5. SIDEBAR & SCAN EXECUTION
+# 5. SIDEBAR & RUN
 # -------------------------------------------------
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
@@ -152,16 +153,16 @@ with st.sidebar:
     capital = st.number_input("Capital ($)", value=10000)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     sectors = st.multiselect("Sectors", options=list(TICKER_MAP.keys()), default=["Market ETFs", "Leveraged (3x/2x)"])
-    max_days = st.slider("Max Days to Expiry", 7, 45, 21)
+    max_days = st.slider("Max Days", 7, 45, 21)
     min_cushion = st.slider("Cushion % (Safety)", 0, 15, 5)
     st.divider()
-    st.error("⚖️ LEGAL DISCLAIMER: No financial advice provided.")
+    st.error("⚖️ LEGAL: No financial advice provided.")
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Scanning {len(univ)} tickers..."):
+    with st.spinner(f"Harvesting premiums from {len(univ)} tickers..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
@@ -169,8 +170,6 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
-    
-    # Render the data table
     sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
                        use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
@@ -182,4 +181,4 @@ if "results" in st.session_state and st.session_state.results:
             cid = f"tv_{row['Ticker']}"
             components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
         with c2:
-            st.markdown(f'<div class="card"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>ROI: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Expiry: {row["Expiry"]}<br>Earnings: {row["E-Date"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row["Dot"]}"></span><span style="font-weight:800; font-size: 12px; color: #64748b; text-transform: uppercase;">Harvest Report</span></div><p style="font-size: 24px; font-weight:800; margin-bottom:0px;">{row["Ticker"]}</p><p class="juice-val">${row["Juice ($)"]} Juice</p><hr><p style="font-size: 15px; color: #475569; line-height: 1.6;"><b>Return:</b> {row["ROI %"]}%<br><b>Net Basis:</b> ${row["Net Basis"]}<br><b>Expiry:</b> {row["Expiry"]}<br><span style="color: #ea580c;"><b>Next Earnings:</b> {row["E-Date"]}</span></p></div>', unsafe_allow_html=True)
