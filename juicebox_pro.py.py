@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES (Fixes NameError: v_v)
+# 2. MARKET DATA UTILITIES
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -59,12 +59,11 @@ def get_market_sentiment():
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
     except: return 0.0, 0.0, "#fff", "#fff"
 
-# CRITICAL: Define these before the UI starts
 status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE DEFINITION
+# 3. UNIVERSE & ENGINE
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -75,15 +74,13 @@ TICKER_MAP = {
     "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
-# -------------------------------------------------
-# 4. SCANNER LOGIC (Fixes SyntaxError)
-# -------------------------------------------------
-def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
+def scan_ticker(t, strategy_type, min_cushion, max_days, capital, target_type, target_val):
     try:
         stock = yf.Ticker(t)
         price = float(stock.fast_info["lastPrice"])
         if not (2.0 <= price <= 100.0): return None
         
+        # Earnings check
         next_e, e_alert = "N/A", ""
         cal = stock.calendar
         if cal is not None and 'Earnings Date' in cal:
@@ -118,19 +115,25 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
                         net_basis = float(match["strike"]) - juice
 
                 if match is not None and net_basis > 0:
+                    juice_dollars = juice * 100
                     roi = (juice / net_basis) * 100
+                    
+                    # Filtering based on user goal
+                    if target_type == "Dollar ($)" and juice_dollars < target_val: continue
+                    if target_type == "Percentage (%)" and roi < target_val: continue
+
                     dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
                         "Dot": dot_style, "Ticker": t, "Earnings": e_alert, "E-Date": next_e,
                         "Price": round(price, 2), "Strike": match["strike"],
-                        "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
+                        "Juice ($)": round(juice_dollars, 2), "ROI %": round(roi, 2),
                         "Expiry": exp, "Net Basis": round(net_basis, 2)
                     }
     except: return None
 
 # -------------------------------------------------
-# 5. UI RENDERING
+# 4. MAIN INTERFACE
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -142,18 +145,12 @@ st.markdown(f"""
 
 st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
 
-# THE LEGEND (5TH GRADE LEVEL)
-with st.expander("📖 JUICEBOX LEGEND - Read This First!"):
+with st.expander("📖 JUICEBOX LEGEND"):
     st.markdown("""
-    ### 🍎 Trading Explained Simple
-    Imagine you are a landlord. You own a house (the Stock) and you are collecting rent (the Juice).
-    
-    * **🧃 Juice:** This is your "Rent Money." It's the profit you get to keep just for waiting.
-    * **🟢 Status Dots:** * **Green:** Great rent! You are getting a lot of money.
-        * **Yellow:** Good rent. It's a fair deal.
-        * **Red:** Low rent. You might be working too hard for too little.
-    * **🛡️ Cushion:** This is your "Safety Net." It's how much the price can fall before you lose money.
-    * **📅 Earnings Alert:** The company is about to share its "Report Card." The stock might jump like a pogo stick!
+    ### 🍎 Trading Made Simple
+    * **🧃 Juice:** Your profit. It's the "rent money" you collect for waiting.
+    * **🛡️ Cushion:** Your safety net. How much the price can fall before you lose money.
+    * **📅 Earnings:** The company report card. Be careful, prices jump during this time!
     """)
 
 with st.sidebar:
@@ -161,6 +158,14 @@ with st.sidebar:
     st.title("Control Panel")
     capital = st.number_input("Capital ($)", value=10000)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
+    
+    # NEW: TARGET GOAL LOGIC
+    st.divider()
+    st.subheader("🎯 Pay Goal")
+    target_type = st.radio("I want to make at least:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input(f"Minimum {target_type}", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    
+    st.divider()
     all_s = list(TICKER_MAP.keys())
     sectors = st.multiselect("Sectors", options=all_s, default=all_s)
     max_days = st.slider("Max Days", 7, 45, 21)
@@ -170,12 +175,11 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Harvesting premiums..."):
+    with st.spinner(f"Harvesting premiums matching your ${target_val if target_type == 'Dollar ($)' else str(target_val)+'%'} goal..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital), univ) if r]
+            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
-# Fixes KeyError by ensuring results exist before creating the dataframe
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
@@ -190,6 +194,18 @@ if "results" in st.session_state and st.session_state.results:
             cid = f"tv_{row['Ticker']}"
             components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
         with c2:
-            st.markdown(f'<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>Return: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Earnings: {row["E-Date"]}</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="card">
+                <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                    <span class="dot {row['Dot']}"></span>
+                    <b>{row['Ticker']} REPORT</b>
+                </div>
+                <p class="juice-val">${row['Juice ($)']} Juice</p>
+                <hr>
+                <b>Return:</b> {row['ROI %']}%<br>
+                <b>Cost Basis:</b> ${row['Net Basis']}<br>
+                <b>Earnings Date:</b> {row['E-Date']}
+            </div>
+            """, unsafe_allow_html=True)
 else:
-    st.info("Click 'RUN GLOBAL SCAN' above to start harvesting.")
+    st.info("No trades found matching your Pay Goal. Try lowering your target or checking more sectors.")
