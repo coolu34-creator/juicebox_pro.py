@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 import numpy as np
 import pytz
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +38,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. AFTER-HOURS DATA LOGIC
+# 2. MARKET DATA UTILITIES (Robust After-Hours)
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -51,16 +51,13 @@ def get_market_status():
 
 def get_market_sentiment():
     try:
-        # Use a 4-day period to ensure we catch Friday's data if it is Sunday
-        data = yf.download(["^GSPC", "^VIX"], period="4d", interval="1d", progress=False)['Close']
+        # Use period=5d to ensure we capture the last trading day even on weekends
+        data = yf.download(["^GSPC", "^VIX"], period="5d", interval="1d", progress=False)['Close']
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff", "#fff"
         
-        spy_now = data["^GSPC"].iloc[-1]
-        spy_prev = data["^GSPC"].iloc[-2]
-        
+        spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
         vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
-        
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
     except: return 0.0, 0.0, "#fff", "#fff"
 
@@ -68,7 +65,7 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. THE 5TH GRADE LEGEND
+# 3. UI RENDERING & LEGEND
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -80,17 +77,16 @@ st.markdown(f"""
 
 st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
 
-with st.expander("📖 JUICEBOX LEGEND - 5th Grade Version"):
+with st.expander("📖 JUICEBOX TERMINOLOGY"):
     st.markdown("""
-    ### 🍎 How it Works
-    * **🧃 Juice:** This is your **Rent Money**. You collect this profit just for letting someone else reserve your stock.
-    * **🛡️ Cushion:** This is your **Safety Net**. It's like having a bumper on a car—the stock price can drop a little, and you'll still be okay!
-    * **📅 Earnings:** This is **Report Card Day**. Companies get graded, and their stock price can jump around a lot. Be careful!
-    * **🌙 After-Hours:** When the market is "Closed," we look at the last prices from the end of the day. It's like looking at a photo of the market from 4:00 PM.
+    * **Extrinsic Value (Juice):** The portion of an option's premium that is not intrinsic value. This represents the time decay and volatility components of the trade.
+    * **Downside Cushion:** The percentage of price protection provided by the premium collected before the position reaches breakeven.
+    * **Net Basis:** The effective cost of the position after subtracting the premium (Juice) collected.
+    * **After-Hours Logic:** During market closure, the terminal utilizes the most recent daily closing data to calculate yields.
     """)
 
 # -------------------------------------------------
-# 4. UNIVERSE & SCANNER
+# 4. UNIVERSE & SCANNER ENGINE
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -104,11 +100,14 @@ TICKER_MAP = {
 def scan_ticker(t, strategy_type, min_cushion, max_days, capital, target_type, target_val):
     try:
         stock = yf.Ticker(t)
-        # Fetch fast info safely for after-hours
-        price = float(stock.history(period="1d")["Close"].iloc[-1])
-        if not (1.0 <= price <= 200.0): return None
+        # Professional closing price fetch for after-hours accuracy
+        hist = stock.history(period="5d")
+        if hist.empty: return None
+        price = float(hist["Close"].iloc[-1])
         
-        # Earnings check
+        if not (1.0 <= price <= 500.0): return None
+        
+        # Earnings Data
         next_e = "N/A"
         try:
             cal = stock.calendar
@@ -122,6 +121,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital, target_type, t
                 chain = stock.option_chain(exp)
                 match, juice, net_basis = None, 0, 0
                 
+                # Logic uses lastPrice to ensure after-hours data availability
                 if strategy_type == "Deep ITM Covered Call":
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100))]
                     if not df.empty:
@@ -158,7 +158,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital, target_type, t
     except: return None
 
 # -------------------------------------------------
-# 5. SIDEBAR & RUN
+# 5. CONTROL PANEL & EXECUTION
 # -------------------------------------------------
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
@@ -166,24 +166,36 @@ with st.sidebar:
     capital = st.number_input("Capital ($)", value=10000)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     
-    st.subheader("🎯 Pay Goal")
-    target_type = st.radio("I want to make at least:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input(f"Minimum {target_type}", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    st.subheader("🎯 Yield Target")
+    target_type = st.radio("Minimum Threshold:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input(f"Min Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
     
-    all_s = list(TICKER_MAP.keys())
-    sectors = st.multiselect("Sectors", options=all_s, default=all_s)
-    max_days = st.slider("Max Days", 7, 45, 21)
+    all_sectors = list(TICKER_MAP.keys())
+    sectors = st.multiselect("Sectors", options=all_sectors, default=all_sectors)
+    max_days = st.slider("Max Days to Expiry", 7, 45, 21)
     min_cushion = st.slider("Cushion %", 0, 15, 5)
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner("Harvesting data... (Even works while you sleep!)"):
+    with st.spinner("Executing data harvest..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry", "Earnings"]], use_container_width=True, hide_index=True)
+    st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
+    sel = st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry", "Earnings"]], 
+                       use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            cid = f"tv_{row['Ticker']}"
+            components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
+        with c2:
+            st.markdown(f'<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} Analysis</b></div><p class="juice-val">${row["Juice ($)"]} Extrinsic</p><hr>ROI: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Earnings: {row["Earnings"]}</div>', unsafe_allow_html=True)
