@@ -33,11 +33,12 @@ st.markdown("""
     .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
     .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
     .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
+    .metric-box { background: #eff6ff; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #bfdbfe; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES
+# 2. MARKET DATA UTILITIES (Fixes NameError & nan%)
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -50,9 +51,12 @@ def get_market_status():
 
 def get_market_sentiment():
     try:
+        # Use period=5d to ensure data on weekends
         data = yf.download(["^GSPC", "^VIX"], period="5d", interval="1d", progress=False)['Close']
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff", "#fff"
+        
         spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
+        # Avoid nan calculations
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
         vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
@@ -62,17 +66,20 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (PREMIUM & JUICE LOGIC)
+# 3. UNIVERSE DEFINITION
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
-    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
-    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
     "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
     "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
-    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT"]
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
+# -------------------------------------------------
+# 4. SCANNER LOGIC (Fixes Syntax Error)
+# -------------------------------------------------
 def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val):
     try:
         stock = yf.Ticker(t)
@@ -87,22 +94,22 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                 match, premium, juice = None, 0, 0
                 intrinsic = 0
                 
+                # Use lastPrice for After-Hours accuracy
                 if strategy_type == "Deep ITM Covered Call":
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100))]
                     if not df.empty:
                         match = df.sort_values("strike", ascending=False).iloc[0]
-                        strike = float(match["strike"])
-                        opt_price = float(match["lastPrice"])
-                        premium = opt_price
-                        intrinsic = max(0, price - strike)
-                        juice = max(0, opt_price - intrinsic)
+                        strike_val = float(match["strike"])
+                        premium = float(match["lastPrice"])
+                        intrinsic = max(0, price - strike_val)
+                        juice = max(0, premium - intrinsic)
                 
                 elif strategy_type == "Standard OTM Covered Call":
                     df = chain.calls[(chain.calls["strike"] > price * 1.01)]
                     if not df.empty:
                         match = df.sort_values("strike", ascending=True).iloc[0]
                         premium = float(match["lastPrice"])
-                        juice = premium # OTM has no intrinsic value
+                        juice = premium
                 
                 elif strategy_type == "Cash Secured Put":
                     df = chain.puts[(chain.puts["strike"] < price * (1 - min_cushion/100))]
@@ -128,7 +135,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
     except: return None
 
 # -------------------------------------------------
-# 4. UI & SIDEBAR
+# 5. UI RENDERING
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -140,15 +147,25 @@ st.markdown(f"""
 
 st.title("🧃 JuiceBox Pro")
 
+with st.expander("📖 HOW THIS WORKS"):
+    st.write("Think of this like renting out a house you own.")
+    st.markdown("""
+    * **Premium:** The total check you get from the renter.
+    * **Juice:** The 'Rent Money' you keep as profit.
+    * **Cushion:** Your 'Safety Net.' How much the price can fall before you lose money.
+    """)
+
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
-    st.subheader("💰 Monthly Tracker")
+    
+    st.subheader("💰 Monthly Income Goal")
     monthly_goal = st.number_input("Goal ($)", value=2000)
     earned = st.number_input("Earned ($)", value=0)
     
     st.divider()
-    target_type = st.radio("Minimum Juice Goal:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input("Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    st.subheader("🎯 Pay Goal")
+    target_type = st.radio("Minimum Juice:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input(f"Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
     
     st.divider()
     all_s = list(TICKER_MAP.keys())
@@ -156,9 +173,13 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     max_days = st.slider("Days Away", 7, 45, 21)
     min_cushion = st.slider("Safety %", 0, 15, 5)
+    
+    st.divider()
+    st.error("⚖️ LEGAL DISCLAIMER")
+    st.caption("JuiceBox Pro is an educational tool. Options trading involves risk. You are responsible for your own financial decisions. Data is not guaranteed to be real-time.")
 
 # -------------------------------------------------
-# 5. RESULTS & BREAKDOWN
+# 6. EXECUTION & PROGRESS (Fixes KeyError)
 # -------------------------------------------------
 remaining = monthly_goal - earned
 st.progress(max(0, min(100, int((earned / monthly_goal) * 100))) / 100 if monthly_goal > 0 else 0)
@@ -167,22 +188,29 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner("Calculating Premiums..."):
+    with st.spinner("Harvesting data..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Expiry"]], 
-                 use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    
+    avg_juice = df["Juice ($)"].mean()
+    needed = int(np.ceil(remaining / avg_juice)) if avg_juice > 0 else 0
+    st.write(f"**Path to Goal:** Average trade pays **${avg_juice:.2f}**. You need **{needed}** more trades.")
 
-    if st.session_state.get("selection") and st.session_state.selection.rows:
-        row = df.iloc[st.session_state.selection.rows[0]]
+    # Fix columns to match dataframe for selection
+    sel = st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Expiry"]], 
+                       use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            st.write("Chart View Active")
+            cid = f"tv_{row['Ticker']}"
+            components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
         with c2:
             st.markdown(f"""
             <div class="card">
@@ -190,9 +218,12 @@ if "results" in st.session_state and st.session_state.results:
                 <p class="premium-val">Total Premium: ${row['Premium ($)']}</p>
                 <hr>
                 <p style="color: grey; font-size: 14px;">Intrinsic (Stock Value): ${row['Intrinsic']}</p>
-                <p class="juice-val">Extrinsic (The Juice): ${row['Juice ($)']}</p>
+                <p class="juice-val">+ Juice (The Profit): ${row['Juice ($)']}</p>
                 <hr>
                 <p><b>Total Return: {row['ROI %']}%</b></p>
                 <p><b>Net Cost Basis: ${row['Net Basis']}</b></p>
+                <p><b>Expiry: {row['Expiry']}</b></p>
             </div>
             """, unsafe_allow_html=True)
+else:
+    st.info("Run global scan to see harvested juice.")
