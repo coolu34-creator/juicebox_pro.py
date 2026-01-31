@@ -28,7 +28,7 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin:0; }
-    .prem-val { color: #3b82f6; font-weight: 700; font-size: 18px; margin:0; }
+    .cap-val { color: #ef4444; font-weight: 700; font-size: 18px; margin:0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -55,26 +55,25 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
     st.subheader("🗓️ Weekly Account Engine")
     
-    total_capital = st.number_input("Account Value ($)", value=10000, step=1000)
+    total_account = st.number_input("Total Account Value ($)", value=10000, step=1000)
     risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
     
     yield_map = {"Conservative": 0.0025, "Middle Road": 0.006, "Aggressive": 0.0125}
-    weekly_goal = total_capital * yield_map[risk_mode]
+    weekly_goal = total_account * yield_map[risk_mode]
     st.metric("Weekly Income Goal", f"${weekly_goal:,.2f}")
 
     st.divider()
     st.subheader("🛡️ Safety & Liquidity")
     min_oi = st.number_input("Min Open Interest", value=500)
-    min_cushion_req = st.slider("Min Cushion %", 0, 20, 5)
     max_price = st.slider("Max Share Price ($)", 10, 100, 100)
     
     st.divider()
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC (Premium & Share Price Added)
+# 4. SCANNER LOGIC (Capital Calculation Added)
 # -------------------------------------------------
-def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit, min_cushion):
+def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
     try:
         stock = yf.Ticker(t)
         info = stock.info
@@ -89,8 +88,9 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit, min_cushion):
                 df = df[df["openInterest"] >= oi_limit]
                 if df.empty: continue
                 
+                # Strike logic
                 if strategy_type == "Deep ITM Covered Call":
-                    match_df = df[df["strike"] < share_price * (1 - min_cushion/100)]
+                    match_df = df[df["strike"] < share_price * 0.92]
                     if match_df.empty: continue
                     match = match_df.sort_values("strike", ascending=False).iloc[0]
                 elif strategy_type == "ATM (At-the-Money)":
@@ -98,20 +98,21 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit, min_cushion):
                     match = df.sort_values("diff").iloc[0]
                 else: match = df.iloc[0]
 
-                opt_premium = float(match["lastPrice"])
+                premium = float(match["lastPrice"])
                 intrinsic = max(0, share_price - float(match["strike"])) if float(match["strike"]) < share_price else 0
-                juice = (opt_premium - intrinsic)
-                basis = share_price - opt_premium
+                juice = (premium - intrinsic)
+                basis = share_price - premium
                 roi = (juice / basis) * 100
                 
-                cushion_pct = ((share_price - basis) / share_price) * 100
+                # Contracts and Required Capital
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
+                capital_req = (share_price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
 
                 return {
                     "Ticker": t, "Share Price": round(share_price, 2), "Strike": float(match["strike"]),
-                    "Total Prem ($)": round(opt_premium * 100, 2), "Juice ($)": round(juice * 100, 2),
-                    "ROI %": round(roi, 2), "Cushion %": round(cushion_pct, 2), "OI": int(match["openInterest"]),
-                    "Contracts": contracts, "DTE": dte, "Expiry": exp
+                    "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
+                    "Contracts": contracts, "Capital Req ($)": round(capital_req, 2),
+                    "DTE": dte, "OI": int(match["openInterest"])
                 }
     except: return None
 
@@ -128,16 +129,35 @@ st.markdown(f"""
 if st.button("RUN WEEKLY SCAN ⚡", use_container_width=True):
     univ = ["SPY", "QQQ", "IWM", "AMD", "NVDA", "AAPL", "TSLA", "PLTR", "SOFI", "AFRM", "MARA", "RIOT", "F", "BAC"]
     with ThreadPoolExecutor(max_workers=20) as ex:
-        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi, min_cushion_req), list(set(univ))) if r]
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     
-    # Selection Table with Premium and Share Price
-    sel = st.dataframe(df[["Ticker", "Share Price", "Strike", "Total Prem ($)", "Juice ($)", "Cushion %", "Contracts"]], 
+    # Table showing Capital Requirement
+    sel = st.dataframe(df[["Ticker", "Juice ($)", "ROI %", "Contracts", "Capital Req ($)", "DTE"]], 
                        use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
         row = df.iloc[sel.selection.rows[0]]
-        st.divider
+        st.divider()
+        
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.write(f"### {row['Ticker']} Chart")
+            components.html(f'<div id="tv_widget" style="height:400px;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv_widget"}});</script>', height=420)
+        with c2:
+            # Feasibility Check
+            is_feasible = "✅ Feasible" if row['Capital Req ($)'] <= total_account else "⚠️ Over Budget"
+            st.markdown(f"""
+            <div class="card">
+                <b>{row['Ticker']} Budget Check</b><br>
+                <p class="juice-val">${row['Juice ($)']} Juice</p>
+                <p><b>Need:</b> {row['Contracts']} Contracts</p>
+                <p class="cap-val">Capital Required: ${row['Capital Req ($)']:,}</p>
+                <hr>
+                <p><b>{is_feasible}</b></p>
+                <p>OI: {row['OI']} | Price: ${row['Share Price']}</p>
+            </div>
+            """, unsafe_allow_html=True)
