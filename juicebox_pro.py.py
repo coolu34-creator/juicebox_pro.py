@@ -34,19 +34,24 @@ st.markdown("""
         background: #f1f5f9; padding: 12px; border-radius: 8px; 
         margin-bottom: 10px; border-left: 5px solid #3b82f6; font-size: 14px;
     }
-    .earnings-alert { color: #ea580c; font-weight: 800; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET SENTIMENT FETCH
+# 2. MARKET SENTIMENT FETCH (Defined First)
 # -------------------------------------------------
 def get_market_sentiment():
     try:
-        # Fetching S&P 500 and VIX
         data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1h", progress=False)['Close']
+        if data.empty or len(data) < 2:
+            return 0.0, 0.0, "#ffffff", "#ffffff"
+        
         spy_now = data["^GSPC"].iloc[-1]
         spy_prev = data["^GSPC"].iloc[-2]
+        # Use isnan check to avoid +nan% display
+        if np.isnan(spy_now) or np.isnan(spy_prev):
+             return 0.0, 0.0, "#ffffff", "#ffffff"
+             
         spy_ch = ((spy_now - spy_prev) / spy_prev) * 100
         vix_v = data["^VIX"].iloc[-1]
         s_c = "#22c55e" if spy_ch >= 0 else "#ef4444"
@@ -55,12 +60,21 @@ def get_market_sentiment():
     except:
         return 0.0, 0.0, "#ffffff", "#ffffff"
 
-# Define variables BEFORE using them in Markdown
+# CRITICAL: Fetch data BEFORE displaying it
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE DEFINITION
+# 3. UI RENDERING
 # -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
+    <span>VIX (Fear Index): <span style="color:{v_c}">{vix_v:.2f}</span></span>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
+
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
     "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
@@ -71,7 +85,7 @@ TICKER_MAP = {
 }
 
 # -------------------------------------------------
-# 4. SCANNER ENGINE
+# 4. SCANNER LOGIC
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
     try:
@@ -118,64 +132,4 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
                         "Dot": dot_style, "Ticker": t, "Earnings": e_alert, "E-Date": next_e,
-                        "Price": round(price, 2), "Strike": match["strike"],
-                        "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
-                        "Expiry": exp, "Net Basis": round(net_basis, 2)
-                    }
-    except: return None
-
-# -------------------------------------------------
-# 5. MAIN UI
-# -------------------------------------------------
-st.markdown(f"""
-<div class="sentiment-bar">
-    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX (Fear Index): <span style="color:{v_c}">{vix_v:.2f}</span></span>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
-
-with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
-    st.title("Control Panel")
-    capital = st.number_input("Capital ($)", value=10000)
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
-    sectors = st.multiselect("Sectors", options=list(TICKER_MAP.keys()), default=["Market ETFs", "Leveraged (3x/2x)"])
-    max_days = st.slider("Max Days to Expiry", 7, 45, 21)
-    min_cushion = st.slider("Cushion % (Safety)", 0, 15, 5)
-    st.divider()
-    st.error("⚖️ LEGAL DISCLAIMER")
-    st.caption("JuiceBox Pro is for educational use. No financial advice. Options trading involves high risk.")
-
-with st.expander("📖 DIRECTION ON HOW TO USE"):
-    st.markdown("""
-    <div class="guide-step"><b>1. Monitor Sentiment:</b> Green SPY + High VIX = Best Income potential.</div>
-    <div class="guide-step"><b>2. Analyze Juice:</b> Focus on 🟢 results. The "Juice" is the profit you keep if the stock stays flat.</div>
-    <div class="guide-step"><b>3. Watch Earnings:</b> 📅 Alert means an earnings report is near. This increases risk significantly.</div>
-    """, unsafe_allow_html=True)
-
-if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
-    univ = []
-    for s in sectors: univ.extend(TICKER_MAP[s])
-    univ = list(set(univ))
-    
-    with st.spinner(f"Harvesting premiums from {len(univ)} tickers..."):
-        with ThreadPoolExecutor(max_workers=25) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital), univ) if r]
-        st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
-
-if "results" in st.session_state and st.session_state.results:
-    df = pd.DataFrame(st.session_state.results)
-    st.download_button(label="📥 Export Juice Leaderboard (CSV)", data=df.to_csv(index=False).encode('utf-8'), file_name=f"JuiceBox_Scan_{datetime.now().strftime('%Y-%m-%d')}.csv", mime='text/csv', use_container_width=True)
-    sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
-
-    if sel.selection.rows:
-        row = df.iloc[sel.selection.rows[0]]
-        st.divider()
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            cid = f"tv_{row['Ticker']}"
-            components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
-        with col2:
-            st.markdown(f"""<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row['Dot']}"></span><span style="font-weight:800; font-size: 12px; color: #64748b; text-transform: uppercase;">Harvest Report</span></div><p style="font-size: 24px; font-weight:800; margin-bottom:0px;">{row['Ticker']}</p><p class="juice-val">${row['Juice ($)']} Extrinsic</p><hr><p style="font-size: 15px; color: #475569; line-height: 1.6;"><b>Period Return:</b> {row['ROI %']}%<br><b>Break-even Basis:</b> ${row['Net Basis']}<br><b>Expiry Date:</b> {row['Expiry']}<br><span class="earnings-alert"><b>Next Earnings:</b> {row['E-Date']} {row['Earnings']}</span></p></div>""", unsafe_allow_html=True)
+                        "Price": round(price, 2), "Strike
