@@ -8,7 +8,7 @@ import pytz
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
-# 1. APP SETUP & BRANDING
+# 1. MOBILE-FIRST APP SETUP
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
@@ -31,6 +31,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Persistent State for Tracking
+if 'total_earned' not in st.session_state: st.session_state.total_earned = 0.0
+if 'trade_log' not in st.session_state: st.session_state.trade_log = []
+
 # -------------------------------------------------
 # 2. MARKET DATA UTILITIES (Fixes NameError)
 # -------------------------------------------------
@@ -49,16 +53,16 @@ def get_market_sentiment():
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff"
         spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
-        vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
-        return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444")
+        vix_val = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
+        return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# Fix: Define these before they are called in UI
+# Pre-define to prevent app crashes on first load
 status_text, status_class = get_market_status()
-spy_ch, vix_v, s_c = get_market_sentiment()
+spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (Fixes KeyError)
+# 3. SCANNER ENGINE (Fixes KeyErrors & Price Cap)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -74,6 +78,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
         stock = yf.Ticker(t)
         info = stock.info
         price = info.get('currentPrice') or info.get('regularMarketPrice')
+        
         if not price or price > max_price: return None
         
         if only_positive:
@@ -103,7 +108,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     basis = price - premium if strategy_type != "Cash Secured Put" else float(match["strike"]) - premium
                     roi = (juice / basis) * 100
                     
-                    # Target income logic
+                    # Contracts Needed Calculation
                     juice_per_contract = juice * 100
                     contracts_needed = int(np.ceil(income_goal / juice_per_contract)) if juice_per_contract > 0 else 0
                     
@@ -112,9 +117,9 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
 
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡", "Ticker": t, "Price": round(price, 2),
-                        "Strike": float(match["strike"]), "Premium ($)": round(premium * 100, 2),
-                        "Juice ($)": round(juice_per_contract, 2), "ROI %": round(roi, 2), "Expiry": exp,
-                        "OI": int(match["openInterest"]), "Contracts": contracts_needed
+                        "Strike": float(match["strike"]), "Juice ($)": round(juice_per_contract, 2),
+                        "ROI %": round(roi, 2), "Contracts": contracts_needed, "Expiry": exp,
+                        "OI": int(match["openInterest"]), "Intrinsic": round(intrinsic * 100, 2), "Net Basis": round(basis, 2)
                     }
     except: return None
 
@@ -124,19 +129,20 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
 st.markdown(f"""
 <div class="sentiment-bar">
     <span class="status-tag {status_class}">{status_text}</span>
-    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {vix_v:.2f}</div>
+    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {v_vix:.2f}</div>
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.subheader("💰 Progress Tracker")
-    income_goal = st.number_input("Target Income ($)", value=2000)
+    st.subheader("💰 Monthly Tracker")
+    income_goal = st.number_input("Target Income Goal ($)", value=2000)
+    st.metric("Earned So Far", f"${st.session_state.total_earned:,.2f}")
     
     st.divider()
-    st.subheader("🛡️ Filters")
+    st.subheader("🛡️ Safety Filters")
     min_oi = st.number_input("Min Open Interest", value=500)
-    max_stock_price = st.slider("Max Price ($)", 10, 100, 100)
-    only_positive = st.checkbox("Healthy Companies Only", value=True)
+    max_stock_price = st.slider("Max Stock Price ($)", 10, 100, 100)
+    only_positive = st.checkbox("Healthy Only", value=True)
     
     st.divider()
     target_type = st.radio("Pay Goal:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
@@ -146,13 +152,16 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 5. EXECUTION & RESULTS
+# 5. EXECUTION & RESULTS (WITH CHART)
 # -------------------------------------------------
+remaining = income_goal - st.session_state.total_earned
+st.progress(max(0, min(100, int((st.session_state.total_earned / income_goal) * 100))) / 100 if income_goal > 0 else 0)
+
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Scanning for liquid trades (OI > {min_oi})..."):
+    with st.spinner("Harvesting juice..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, 5, 21, target_type, target_val, max_stock_price, only_positive, min_oi, income_goal), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
@@ -160,6 +169,34 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     
-    # Fix: Ensure columns match exactly to avoid KeyError
-    display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Contracts", "Expiry", "OI"]
-    st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
+    # Table Display
+    display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Contracts", "Expiry"]
+    sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            # INTERACTIVE CHART
+            cid = f"tv_{row['Ticker']}"
+            components.html(f"""
+            <div id="{cid}" style="height:400px; width:100%;"></div>
+            <script src="https://s3.tradingview.com/tv.js"></script>
+            <script>new TradingView.widget({{"autosize": true, "symbol": "{row['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>
+            """, height=420)
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+                <b>{row['Ticker']} BREAKDOWN</b>
+                <p class="juice-val">${row['Juice ($)']} Juice</p>
+                <p><b>Target:</b> {row['Contracts']} Contracts</p>
+                <hr>
+                <p>Stock Basis: ${row['Net Basis']}</p>
+                <p>Intrinsic Val: ${row['Intrinsic']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button(f"💾 LOG {row['Ticker']} AS DONE"):
+                st.session_state.total_earned += (row['Juice ($)'] * row['Contracts'])
+                st.toast(f"Logged ${row['Juice ($)'] * row['Contracts']}!")
+                st.rerun()
