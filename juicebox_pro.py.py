@@ -29,15 +29,12 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin: 0; }
-    .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
-    .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
-    .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
-    .dot-red { background-color: #dc2626; box-shadow: 0 0 10px #dc2626; }
+    .metric-box { background: #eff6ff; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #bfdbfe; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA (AFTER-HOURS READY)
+# 2. MARKET DATA UTILITIES
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -62,30 +59,7 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UI RENDERING
-# -------------------------------------------------
-st.markdown(f"""
-<div class="sentiment-bar">
-    <span class="status-tag {status_class}">{status_text}</span>
-    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
-</div>
-""", unsafe_allow_html=True)
-
-st.title("🧃 JuiceBox Pro")
-
-# SIMPLE EXPLANATION (LEGEND)
-with st.expander("📖 How This Works"):
-    st.write("Think of this like renting out a house you own.")
-    st.markdown("""
-    * **Juice:** This is the 'Rent Money' you collect. You get to keep this as profit.
-    * **Cushion:** This is your 'Safety Net.' It shows how much the price can fall before you lose money.
-    * **Status Dots:** 🟢 means a great deal, 🟡 means a fair deal, and 🔴 means a small deal.
-    * **Earnings:** This is like 'Report Card Day' for the stock. The price might move up or down very fast!
-    """)
-
-# -------------------------------------------------
-# 4. UNIVERSE & ENGINE
+# 3. UNIVERSE & SCANNER
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -134,53 +108,78 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     if target_type == "Dollar ($)" and juice_dollars < target_val: continue
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
-                    dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
-                        "Dot": dot_style, "Ticker": t, "Price": round(price, 2), 
-                        "Strike": match["strike"], "Juice ($)": round(juice_dollars, 2), 
-                        "ROI %": round(roi, 2), "Expiry": exp, "Net Basis": round(net_basis, 2)
+                        "Ticker": t, "Price": round(price, 2), "Strike": match["strike"],
+                        "Juice ($)": round(juice_dollars, 2), "ROI %": round(roi, 2), "Expiry": exp
                     }
     except: return None
 
 # -------------------------------------------------
-# 5. CONTROL PANEL & LEGAL
+# 4. MAIN INTERFACE & TRACKER
 # -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
+    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
+</div>
+""", unsafe_allow_html=True)
+
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
-    st.subheader("Your Target")
-    target_type = st.radio("Minimum Goal:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input(f"Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    st.title("Settings")
     
-    st.subheader("Settings")
-    strategy = st.selectbox("Pick a Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
+    # PROGRESS TRACKER INPUTS
+    st.subheader("💰 Monthly Income Goal")
+    monthly_goal = st.number_input("Goal ($)", value=2000, step=100)
+    current_earned = st.number_input("Earned So Far ($)", value=0, step=50)
+    
+    st.divider()
+    target_type = st.radio("Minimum Goal Per Trade:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input("Min Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     all_s = list(TICKER_MAP.keys())
     sectors = st.multiselect("Sectors", options=all_s, default=all_s)
-    max_days = st.slider("Days Away", 7, 45, 21)
-    min_cushion = st.slider("Safety %", 0, 15, 5)
-    
-    # PROFESSIONAL LEGAL TERMINOLOGY
-    st.divider()
-    st.error("⚖️ LEGAL DISCLAIMER")
-    st.caption("""
-    This application is for informational and educational purposes only. 
-    It does not constitute financial, investment, or legal advice. 
-    Options trading involves substantial risk of loss and is not suitable for every investor. 
-    The data provided is sourced from public APIs and is not guaranteed to be accurate, 
-    complete, or real-time. By using this tool, you acknowledge that you are 
-    solely responsible for your own trading decisions and financial outcomes.
-    """)
+    max_days = st.slider("Days to Expiry", 7, 45, 21)
+    min_cushion = st.slider("Safety Cushion %", 0, 15, 5)
+
+st.title("🧃 JuiceBox Pro")
+
+# PROGRESS DISPLAY
+remaining = monthly_goal - current_earned
+progress_pct = min(100, int((current_earned / monthly_goal) * 100)) if monthly_goal > 0 else 0
+st.progress(progress_pct / 100)
+st.write(f"**Monthly Progress:** {progress_pct}% of your ${monthly_goal} goal reached.")
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner("Finding the best deals..."):
+    with st.spinner("Finding the best matches..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.download_button("📥 Save Results (CSV)", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
+    
+    # CALCULATE TRADES NEEDED
+    avg_juice = df["Juice ($)"].mean()
+    trades_needed = int(np.ceil(remaining / avg_juice)) if avg_juice > 0 else 0
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f'<div class="metric-box"><b>Avg Juice Per Trade</b><br><span style="font-size:24px; color:#1e40af;">${avg_juice:.2f}</span></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="metric-box"><b>Remaining to Goal</b><br><span style="font-size:24px; color:#b91c1c;">${remaining:.2f}</span></div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'<div class="metric-box"><b>Trades Needed</b><br><span style="font-size:24px; color:#16a34a;">{trades_needed}</span></div>', unsafe_allow_html=True)
+
+    st.divider()
     st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], use_container_width=True, hide_index=True)
+    
+# LEGAL DISCLAIMER
+st.divider()
+st.caption("**Legal Disclaimer:** This tool is for educational purposes only. Options trading involves risk. You are responsible for your own financial decisions.")
