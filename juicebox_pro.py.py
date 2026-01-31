@@ -8,7 +8,7 @@ import pytz
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
-# 1. MOBILE APP SETUP
+# 1. MOBILE-FIRST APP SETUP
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
@@ -27,56 +27,81 @@ st.markdown("""
         border: 1px solid #e2e8f0; border-radius: 15px; background: white; 
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
+    .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; }
 </style>
 """, unsafe_allow_html=True)
 
-if 'total_earned' not in st.session_state: st.session_state.total_earned = 0.0
+# -------------------------------------------------
+# 2. MARKET DATA UTILITIES (Fixes NameError)
+# -------------------------------------------------
+def get_market_status():
+    tz = pytz.timezone('America/New_York')
+    now = datetime.now(tz)
+    is_weekday = now.weekday() < 5
+    m_open, m_close = time(9, 30), time(16, 0)
+    if is_weekday and m_open <= now.time() <= m_close:
+        return "Market Open", "status-open"
+    return "Market Closed", "status-closed"
 
-# -------------------------------------------------
-# 2. DATA UTILITIES
-# -------------------------------------------------
 def get_market_sentiment():
     try:
         data = yf.download(["^GSPC", "^VIX"], period="5d", interval="1d", progress=False)['Close']
-        if data.empty: return 0.0, 0.0, "#fff"
-        spy_ch = ((data["^GSPC"].iloc[-1] - data["^GSPC"].iloc[-2]) / data["^GSPC"].iloc[-2]) * 100
-        v_vix = data["^VIX"].iloc[-1]
-        return spy_ch, v_vix, ("#22c55e" if spy_ch >= 0 else "#ef4444")
+        if data.empty or len(data) < 2: return 0.0, 0.0, "#fff"
+        spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
+        spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
+        vix_val = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
+        return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
+status_text, status_class = get_market_status()
 spy_ch, v_vix, s_c = get_market_sentiment()
-status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
 
 # -------------------------------------------------
-# 3. SIDEBAR & FEASIBILITY CHECK
+# 3. SIDEBAR: ACCOUNT MODES & FEASIBILITY
 # -------------------------------------------------
 with st.sidebar:
-    st.subheader("💰 Feasibility Tracker")
-    total_capital = st.number_input("Total Trading Capital ($)", value=10000)
-    income_goal = st.number_input("Monthly Income Goal ($)", value=200)
+    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
+    st.subheader("💰 Account Engine")
     
-    # Feasibility Logic
-    yield_req = (income_goal / total_capital) * 100 if total_capital > 0 else 0
-    if yield_req <= 2.0:
-        st.success(f"Feasible: Targets {yield_req:.1f}% monthly yield.")
-    elif yield_req <= 5.0:
-        st.warning(f"Aggressive: Targets {yield_req:.1f}% monthly yield.")
+    total_capital = st.number_input("Total Account Value ($)", value=10000, step=1000)
+    
+    # RISK MODE SELECTION
+    risk_mode = st.select_slider(
+        "Select Risk Profile",
+        options=["Conservative", "Middle Road", "Aggressive"],
+        value="Conservative"
+    )
+    
+    # Calculate feasible goal based on account size
+    if risk_mode == "Conservative":
+        target_yield = 0.01  # 1% per month
+        st.info("Goal: 1% Yield. Prioritizes Deep ITM cushion.")
+    elif risk_mode == "Middle Road":
+        target_yield = 0.025 # 2.5% per month
+        st.warning("Goal: 2.5% Yield. Balanced safety and profit.")
     else:
-        st.error(f"High Risk: Targets {yield_req:.1f}% monthly yield.")
+        target_yield = 0.05  # 5% per month
+        st.error("Goal: 5% Yield. High risk, lower safety cushion.")
+    
+    income_goal = total_capital * target_yield
+    st.metric("Monthly Income Goal", f"${income_goal:,.2f}")
 
     st.divider()
-    max_price = st.slider("Max Stock Price", 10, 100, 100)
+    st.subheader("🛡️ Liquidity & Safety")
     min_oi = st.number_input("Min Open Interest", value=500)
+    max_price = st.slider("Max Stock Price ($)", 10, 100, 100)
+    
+    st.divider()
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC
+# 4. SCANNER ENGINE (Contracts based on Account Goal)
 # -------------------------------------------------
 TICKER_MAP = {
-    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITX", "FAS", "SPXL", "SQQQ", "UVXY"],
-    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "BITO"],
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
     "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
-    "Finance": ["BAC", "WFC", "C", "NU", "SQ", "PYPL", "COIN"],
+    "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
     "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
     "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
@@ -88,7 +113,7 @@ def scan_ticker(t, strategy_type, income_goal, max_p, oi_limit):
         price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not price or price > max_p: return None
         
-        # Fundamental Filter: Must have positive profit margin
+        # Fundamental Filter
         if info.get('profitMargins', 0) <= 0: return None
 
         for exp in stock.options[:2]:
@@ -97,36 +122,42 @@ def scan_ticker(t, strategy_type, income_goal, max_p, oi_limit):
                 chain = stock.option_chain(exp)
                 df = chain.calls if strategy_type != "Cash Secured Put" else chain.puts
                 df = df[df["openInterest"] >= oi_limit]
-                
                 if df.empty: continue
                 
                 # Selection Logic
                 if strategy_type == "Deep ITM Covered Call":
-                    match = df[df["strike"] < price * 0.90].sort_values("strike", ascending=False).iloc[0]
+                    match_df = df[df["strike"] < price * 0.90]
+                    if match_df.empty: continue
+                    match = match_df.sort_values("strike", ascending=False).iloc[0]
                 elif strategy_type == "ATM (At-the-Money)":
                     df["diff"] = abs(df["strike"] - price)
                     match = df.sort_values("diff").iloc[0]
                 else:
-                    match = df.iloc[0] # Default placeholder for OTM/Put logic
-                
+                    match = df.iloc[0]
+
                 premium = float(match["lastPrice"])
                 intrinsic = max(0, price - float(match["strike"])) if float(match["strike"]) < price else 0
                 juice = (premium - intrinsic)
                 basis = price - premium
                 roi = (juice / basis) * 100
                 
-                juice_total = juice * 100
-                contracts = int(np.ceil(income_goal / juice_total)) if juice_total > 0 else 0
+                # Contracts Needed Calculation
+                juice_per_contract = juice * 100
+                contracts_needed = int(np.ceil(income_goal / juice_per_contract)) if juice_per_contract > 0 else 0
                 
+                # Safety Cushion %
+                cushion_pct = ((price - basis) / price) * 100
+
                 return {
-                    "Ticker": t, "Price": round(price, 2), "Strike": match["strike"],
-                    "Juice ($)": round(juice_total, 2), "ROI %": round(roi, 2),
-                    "Contracts": contracts, "DTE": dte, "Status": "🟢" if roi > 1 else "🟡"
+                    "Ticker": t, "Price": round(price, 2), "Strike": float(match["strike"]),
+                    "Juice ($)": round(juice_per_contract, 2), "ROI %": round(roi, 2),
+                    "Cushion %": round(cushion_pct, 2), "Contracts": contracts_needed, 
+                    "DTE": dte, "Expiry": exp, "Basis": round(basis, 2)
                 }
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY
+# 5. UI DISPLAY & RESULTS
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -135,7 +166,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("RUN SCAN ⚡", use_container_width=True):
+if st.button("RUN ACCOUNT SCAN ⚡", use_container_width=True):
     univ = []
     for s in TICKER_MAP.values(): univ.extend(s)
     with ThreadPoolExecutor(max_workers=20) as ex:
@@ -144,4 +175,5 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df[["Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Cushion %", "Contracts", "DTE"]], 
+                 use_container_width=True, hide_index=True)
