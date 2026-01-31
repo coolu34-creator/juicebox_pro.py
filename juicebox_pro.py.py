@@ -29,12 +29,16 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin: 0; }
+    .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
+    .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
+    .dot-red { background-color: #dc2626; box-shadow: 0 0 10px #dc2626; }
     .metric-box { background: #eff6ff; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #bfdbfe; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES
+# 2. MARKET DATA (Fixes NameError & nan%)
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -59,7 +63,41 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE & SCANNER
+# 3. UI RENDERING & PROGRESS TRACKER
+# -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
+    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
+</div>
+""", unsafe_allow_html=True)
+
+st.title("🧃 JuiceBox Pro")
+
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
+    
+    st.subheader("💰 Monthly Income Goal")
+    monthly_goal = st.number_input("Goal ($)", value=2000, step=100)
+    current_earned = st.number_input("Earned So Far ($)", value=0, step=50)
+    
+    st.divider()
+    st.subheader("🎯 Pay Goal")
+    target_type = st.radio("I want to make at least:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input(f"Min {target_type}", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    
+    st.divider()
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
+    max_days = st.slider("Days Away", 7, 45, 21)
+    min_cushion = st.slider("Safety %", 0, 15, 5)
+    
+    st.divider()
+    st.error("⚖️ LEGAL DISCLAIMER")
+    st.caption("This app is for educational purposes only. Options trading involves risk. You are responsible for your own financial decisions.")
+
+# -------------------------------------------------
+# 4. UNIVERSE & SCANNER ENGINE
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
@@ -108,78 +146,52 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     if target_type == "Dollar ($)" and juice_dollars < target_val: continue
                     if target_type == "Percentage (%)" and roi < target_val: continue
 
+                    dot_style = "dot-green" if roi > 1.2 else "dot-yellow" if roi > 0.5 else "dot-red"
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡" if roi > 0.5 else "🔴",
-                        "Ticker": t, "Price": round(price, 2), "Strike": match["strike"],
-                        "Juice ($)": round(juice_dollars, 2), "ROI %": round(roi, 2), "Expiry": exp
+                        "Dot": dot_style, "Ticker": t, "Price": round(price, 2), 
+                        "Strike": match["strike"], "Juice ($)": round(juice_dollars, 2), 
+                        "ROI %": round(roi, 2), "Expiry": exp, "Net Basis": round(net_basis, 2)
                     }
     except: return None
 
 # -------------------------------------------------
-# 4. MAIN INTERFACE & TRACKER
+# 5. EXECUTION & DISPLAY (Fixes KeyError)
 # -------------------------------------------------
-st.markdown(f"""
-<div class="sentiment-bar">
-    <span class="status-tag {status_class}">{status_text}</span>
-    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX: <span style="color:{v_c}">{vix_v:.2f}</span></span>
-</div>
-""", unsafe_allow_html=True)
-
-with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
-    st.title("Settings")
-    
-    # PROGRESS TRACKER INPUTS
-    st.subheader("💰 Monthly Income Goal")
-    monthly_goal = st.number_input("Goal ($)", value=2000, step=100)
-    current_earned = st.number_input("Earned So Far ($)", value=0, step=50)
-    
-    st.divider()
-    target_type = st.radio("Minimum Goal Per Trade:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input("Min Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
-    
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
-    all_s = list(TICKER_MAP.keys())
-    sectors = st.multiselect("Sectors", options=all_s, default=all_s)
-    max_days = st.slider("Days to Expiry", 7, 45, 21)
-    min_cushion = st.slider("Safety Cushion %", 0, 15, 5)
-
-st.title("🧃 JuiceBox Pro")
-
-# PROGRESS DISPLAY
 remaining = monthly_goal - current_earned
-progress_pct = min(100, int((current_earned / monthly_goal) * 100)) if monthly_goal > 0 else 0
-st.progress(progress_pct / 100)
-st.write(f"**Monthly Progress:** {progress_pct}% of your ${monthly_goal} goal reached.")
+st.progress(max(0, min(100, int((current_earned / monthly_goal) * 100))) / 100 if monthly_goal > 0 else 0)
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
-    for s in sectors: univ.extend(TICKER_MAP[s])
+    for s in TICKER_MAP.values(): univ.extend(s)
     univ = list(set(univ))
-    with st.spinner("Finding the best matches..."):
-        with ThreadPoolExecutor(max_workers=25) as ex:
+    with st.spinner("Harvesting data..."):
+        with ThreadPoolExecutor(max_workers=20) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     
-    # CALCULATE TRADES NEEDED
+    # Progress Metrics
     avg_juice = df["Juice ($)"].mean()
     trades_needed = int(np.ceil(remaining / avg_juice)) if avg_juice > 0 else 0
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(f'<div class="metric-box"><b>Avg Juice Per Trade</b><br><span style="font-size:24px; color:#1e40af;">${avg_juice:.2f}</span></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'<div class="metric-box"><b>Remaining to Goal</b><br><span style="font-size:24px; color:#b91c1c;">${remaining:.2f}</span></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown(f'<div class="metric-box"><b>Trades Needed</b><br><span style="font-size:24px; color:#16a34a;">{trades_needed}</span></div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Avg Juice", f"${avg_juice:.2f}")
+    c2.metric("Remaining", f"${remaining:.2f}")
+    c3.metric("Trades Needed", f"{trades_needed}")
 
-    st.divider()
-    st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], use_container_width=True, hide_index=True)
-    
-# LEGAL DISCLAIMER
-st.divider()
-st.caption("**Legal Disclaimer:** This tool is for educational purposes only. Options trading involves risk. You are responsible for your own financial decisions.")
+    sel = st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
+                       use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            cid = f"tv_{row['Ticker']}"
+            components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
+        with col2:
+            st.markdown(f'<div class="card"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>Return: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Expiry: {row["Expiry"]}</div>', unsafe_allow_html=True)
+else:
+    st.info("Click 'RUN GLOBAL SCAN' to see results.")
