@@ -16,7 +16,7 @@ st.markdown("""
 <style>
     .main { background-color: #f8fafc; padding: 10px; }
     .sentiment-bar { 
-        background: #1e293b; color: white; padding: 15px; 
+        background: #000000; color: white; padding: 15px; 
         border-radius: 15px; margin-bottom: 20px; 
         display: flex; flex-direction: column; align-items: center; gap: 8px;
     }
@@ -49,13 +49,23 @@ spy_ch, v_vix, s_c = get_market_sentiment()
 status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
 
 # -------------------------------------------------
-# 3. SIDEBAR: WEEKLY GOAL & ACCOUNT ENGINE
+# 3. SIDEBAR: ACCOUNT & SECTOR FILTERS
 # -------------------------------------------------
+TICKER_MAP = {
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
+    "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
+    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
+}
+
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/box.png", width=60)
-    st.subheader("🗓️ Weekly Account Engine")
+    # UPDATED BRANDING: Black Couple Image
+    st.image("https://images.unsplash.com/photo-1530268585673-b29517dc009a?q=80&w=300&auto=format&fit=crop", caption="Generational Wealth", use_container_width=True)
     
-    total_account = st.number_input("Total Account Value ($)", value=10000, step=1000)
+    st.subheader("🗓️ Weekly Account Engine")
+    total_account = st.number_input("Account Value ($)", value=10000, step=1000)
     risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
     
     yield_map = {"Conservative": 0.0025, "Middle Road": 0.006, "Aggressive": 0.0125}
@@ -63,15 +73,18 @@ with st.sidebar:
     st.metric("Weekly Income Goal", f"${weekly_goal:,.2f}")
 
     st.divider()
+    # SECTOR FILTER: Default to All
+    all_sectors = list(TICKER_MAP.keys())
+    selected_sectors = st.multiselect("Sectors to Scan", options=all_sectors, default=all_sectors)
+    
+    st.divider()
     st.subheader("🛡️ Safety & Liquidity")
     min_oi = st.number_input("Min Open Interest", value=500)
     max_price = st.slider("Max Share Price ($)", 10, 100, 100)
-    
-    st.divider()
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC (Capital Calculation Added)
+# 4. SCANNER LOGIC
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
     try:
@@ -88,7 +101,6 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
                 df = df[df["openInterest"] >= oi_limit]
                 if df.empty: continue
                 
-                # Strike logic
                 if strategy_type == "Deep ITM Covered Call":
                     match_df = df[df["strike"] < share_price * 0.92]
                     if match_df.empty: continue
@@ -102,22 +114,21 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
                 intrinsic = max(0, share_price - float(match["strike"])) if float(match["strike"]) < share_price else 0
                 juice = (premium - intrinsic)
                 basis = share_price - premium
-                roi = (juice / basis) * 100
                 
-                # Contracts and Required Capital
+                # Contracts and Capital
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
                 capital_req = (share_price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
 
                 return {
-                    "Ticker": t, "Share Price": round(share_price, 2), "Strike": float(match["strike"]),
-                    "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
+                    "Ticker": t, "Price": round(share_price, 2), "Strike": float(match["strike"]),
+                    "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/basis)*100, 2),
                     "Contracts": contracts, "Capital Req ($)": round(capital_req, 2),
                     "DTE": dte, "OI": int(match["openInterest"])
                 }
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY & RESULTS
+# 5. UI DISPLAY
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -126,38 +137,32 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("RUN WEEKLY SCAN ⚡", use_container_width=True):
-    univ = ["SPY", "QQQ", "IWM", "AMD", "NVDA", "AAPL", "TSLA", "PLTR", "SOFI", "AFRM", "MARA", "RIOT", "F", "BAC"]
+if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
+    univ = []
+    for s in selected_sectors: univ.extend(TICKER_MAP[s])
     with ThreadPoolExecutor(max_workers=20) as ex:
         results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    
-    # Table showing Capital Requirement
-    sel = st.dataframe(df[["Ticker", "Juice ($)", "ROI %", "Contracts", "Capital Req ($)", "DTE"]], 
+    sel = st.dataframe(df[["Ticker", "Juice ($)", "ROI %", "Contracts", "Capital Req ($)"]], 
                        use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
         row = df.iloc[sel.selection.rows[0]]
         st.divider()
-        
         c1, c2 = st.columns([2, 1])
         with c1:
-            st.write(f"### {row['Ticker']} Chart")
-            components.html(f'<div id="tv_widget" style="height:400px;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv_widget"}});</script>', height=420)
+            components.html(f'<div id="tv" style="height:400px;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize":true,"symbol":"{row["Ticker"]}","interval":"D","theme":"light","style":"1","container_id":"tv"}});</script>', height=420)
         with c2:
-            # Feasibility Check
-            is_feasible = "✅ Feasible" if row['Capital Req ($)'] <= total_account else "⚠️ Over Budget"
             st.markdown(f"""
             <div class="card">
-                <b>{row['Ticker']} Budget Check</b><br>
+                <b>{row['Ticker']} Budget Analysis</b><br>
                 <p class="juice-val">${row['Juice ($)']} Juice</p>
-                <p><b>Need:</b> {row['Contracts']} Contracts</p>
-                <p class="cap-val">Capital Required: ${row['Capital Req ($)']:,}</p>
+                <p class="cap-val">Budget Needed: ${row['Capital Req ($)']:,}</p>
                 <hr>
-                <p><b>{is_feasible}</b></p>
-                <p>OI: {row['OI']} | Price: ${row['Share Price']}</p>
+                <b>Weekly Contracts:</b> {row['Contracts']}<br>
+                <b>Available Liquidity:</b> {row['OI']}
             </div>
             """, unsafe_allow_html=True)
