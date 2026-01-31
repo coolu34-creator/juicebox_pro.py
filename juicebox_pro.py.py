@@ -29,16 +29,13 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin: 0; }
-    .premium-val { color: #3b82f6; font-weight: 700; font-size: 20px; margin: 0; }
     .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
     .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
-    .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
-    .metric-box { background: #eff6ff; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #bfdbfe; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES (Fixes NameError & nan%)
+# 2. MARKET DATA UTILITIES
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
@@ -51,12 +48,9 @@ def get_market_status():
 
 def get_market_sentiment():
     try:
-        # Use period=5d to ensure data on weekends
         data = yf.download(["^GSPC", "^VIX"], period="5d", interval="1d", progress=False)['Close']
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff", "#fff"
-        
         spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
-        # Avoid nan calculations
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
         vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
         return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444"), ("#ef4444" if vix_v > 22 else "#22c55e")
@@ -66,35 +60,40 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UNIVERSE DEFINITION
+# 3. SCANNER ENGINE (Fundamental Filtering Added)
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
-    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
-    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI"],
     "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
     "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
-    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT"]
 }
 
-# -------------------------------------------------
-# 4. SCANNER LOGIC (Fixes Syntax Error)
-# -------------------------------------------------
-def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val):
+def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val, max_price, only_positive):
     try:
         stock = yf.Ticker(t)
-        hist = stock.history(period="5d")
-        if hist.empty: return None
-        price = float(hist["Close"].iloc[-1])
+        info = stock.info
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
         
+        # 1. Price Cap Check
+        if not price or price > max_price: return None
+        
+        # 2. Fundamental Filter (Earnings & Margin)
+        if only_positive:
+            eps = info.get('forwardEps', 0)
+            margin = info.get('profitMargins', 0)
+            # Skip if company is losing money (Negative EPS or Margin)
+            if (eps is not None and eps < 0) or (margin is not None and margin < 0):
+                return None
+
         for exp in stock.options[:3]:
             days = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
             if 4 <= days <= max_days:
                 chain = stock.option_chain(exp)
-                match, premium, juice = None, 0, 0
-                intrinsic = 0
+                match, premium, juice, intrinsic = None, 0, 0, 0
                 
-                # Use lastPrice for After-Hours accuracy
                 if strategy_type == "Deep ITM Covered Call":
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100))]
                     if not df.empty:
@@ -129,13 +128,13 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     return {
                         "Status": "🟢" if roi > 1.2 else "🟡", "Ticker": t, "Price": round(price, 2),
                         "Strike": float(match["strike"]), "Premium ($)": round(premium * 100, 2),
-                        "Intrinsic": round(intrinsic * 100, 2), "Juice ($)": round(juice * 100, 2),
-                        "ROI %": round(roi, 2), "Expiry": exp, "Net Basis": round(net_basis, 2)
+                        "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2), "Expiry": exp,
+                        "EPS": round(eps, 2) if only_positive else "N/A"
                     }
     except: return None
 
 # -------------------------------------------------
-# 5. UI RENDERING
+# 4. INTERFACE
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -147,25 +146,24 @@ st.markdown(f"""
 
 st.title("🧃 JuiceBox Pro")
 
-with st.expander("📖 HOW THIS WORKS"):
-    st.write("Think of this like renting out a house you own.")
-    st.markdown("""
-    * **Premium:** The total check you get from the renter.
-    * **Juice:** The 'Rent Money' you keep as profit.
-    * **Cushion:** Your 'Safety Net.' How much the price can fall before you lose money.
-    """)
-
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
     
-    st.subheader("💰 Monthly Income Goal")
+    st.subheader("💰 Monthly Goal")
     monthly_goal = st.number_input("Goal ($)", value=2000)
     earned = st.number_input("Earned ($)", value=0)
     
     st.divider()
-    st.subheader("🎯 Pay Goal")
-    target_type = st.radio("Minimum Juice:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
-    target_val = st.number_input(f"Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
+    st.subheader("🛡️ Safety Filters")
+    max_stock_price = st.slider("Max Stock Price ($)", 10, 100, 100)
+    
+    # NEW FUNDAMENTAL TOGGLE
+    only_positive = st.checkbox("Only Positive Fundamentals", value=True)
+    st.caption("Filters out companies with negative earnings (EPS) or profit margins.")
+
+    st.divider()
+    target_type = st.radio("Min Juice Target:", ["Dollar ($)", "Percentage (%)"], horizontal=True)
+    target_val = st.number_input("Value", value=50.0 if target_type == "Dollar ($)" else 1.0)
     
     st.divider()
     all_s = list(TICKER_MAP.keys())
@@ -173,13 +171,9 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
     max_days = st.slider("Days Away", 7, 45, 21)
     min_cushion = st.slider("Safety %", 0, 15, 5)
-    
-    st.divider()
-    st.error("⚖️ LEGAL DISCLAIMER")
-    st.caption("JuiceBox Pro is an educational tool. Options trading involves risk. You are responsible for your own financial decisions. Data is not guaranteed to be real-time.")
 
 # -------------------------------------------------
-# 6. EXECUTION & PROGRESS (Fixes KeyError)
+# 5. EXECUTION
 # -------------------------------------------------
 remaining = monthly_goal - earned
 st.progress(max(0, min(100, int((earned / monthly_goal) * 100))) / 100 if monthly_goal > 0 else 0)
@@ -188,42 +182,11 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner("Harvesting data..."):
+    with st.spinner(f"Scanning for healthy companies under ${max_stock_price}..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val), univ) if r]
+            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, target_type, target_val, max_stock_price, only_positive), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    
-    avg_juice = df["Juice ($)"].mean()
-    needed = int(np.ceil(remaining / avg_juice)) if avg_juice > 0 else 0
-    st.write(f"**Path to Goal:** Average trade pays **${avg_juice:.2f}**. You need **{needed}** more trades.")
-
-    # Fix columns to match dataframe for selection
-    sel = st.dataframe(df[["Status", "Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Expiry"]], 
-                       use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
-
-    if sel.selection.rows:
-        row = df.iloc[sel.selection.rows[0]]
-        st.divider()
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            cid = f"tv_{row['Ticker']}"
-            components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
-        with c2:
-            st.markdown(f"""
-            <div class="card">
-                <b>{row['Ticker']} PREMIUM BREAKDOWN</b>
-                <p class="premium-val">Total Premium: ${row['Premium ($)']}</p>
-                <hr>
-                <p style="color: grey; font-size: 14px;">Intrinsic (Stock Value): ${row['Intrinsic']}</p>
-                <p class="juice-val">+ Juice (The Profit): ${row['Juice ($)']}</p>
-                <hr>
-                <p><b>Total Return: {row['ROI %']}%</b></p>
-                <p><b>Net Cost Basis: ${row['Net Basis']}</b></p>
-                <p><b>Expiry: {row['Expiry']}</b></p>
-            </div>
-            """, unsafe_allow_html=True)
-else:
-    st.info("Run global scan to see harvested juice.")
+    st.dataframe(df, use_container_width=True, hide_index=True)
