@@ -21,9 +21,7 @@ st.markdown("""
         display: flex; justify-content: space-around; font-weight: 700; 
         box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); align-items: center;
     }
-    .status-tag {
-        padding: 4px 12px; border-radius: 20px; font-size: 12px; text-transform: uppercase;
-    }
+    .status-tag { padding: 4px 12px; border-radius: 20px; font-size: 12px; text-transform: uppercase; }
     .status-open { background-color: #16a34a; color: white; }
     .status-closed { background-color: #dc2626; color: white; }
     .card { 
@@ -36,23 +34,19 @@ st.markdown("""
     .dot-green { background-color: #16a34a; box-shadow: 0 0 10px #16a34a; }
     .dot-yellow { background-color: #facc15; box-shadow: 0 0 10px #facc15; }
     .dot-red { background-color: #dc2626; box-shadow: 0 0 10px #dc2626; }
+    .legend-box { background-color: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET STATUS & SENTIMENT
+# 2. MARKET DATA UTILITIES
 # -------------------------------------------------
 def get_market_status():
     tz = pytz.timezone('America/New_York')
     now = datetime.now(tz)
     is_weekday = now.weekday() < 5
-    market_open = time(9, 30)
-    market_close = time(16, 0)
-    
-    if is_weekday and market_open <= now.time() <= market_close:
-        return "Market Open", "status-open"
-    else:
-        return "Market Closed", "status-closed"
+    m_open, m_close = time(9, 30), time(16, 0)
+    return ("Market Open", "status-open") if is_weekday and m_open <= now.time() <= m_close else ("Market Closed", "status-closed")
 
 def get_market_sentiment():
     try:
@@ -68,37 +62,23 @@ status_text, status_class = get_market_status()
 spy_ch, vix_v, s_c, v_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. UI RENDERING
+# 3. UNIVERSE & ENGINE
 # -------------------------------------------------
-st.markdown(f"""
-<div class="sentiment-bar">
-    <span class="status-tag {status_class}">{status_text}</span>
-    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
-    <span>VIX (Fear Index): <span style="color:{v_c}">{vix_v:.2f}</span></span>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
-
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BOIL", "KOLD", "BITX", "FAS", "SPXL", "SQQQ", "UNG", "UVXY"],
-    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
-    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "PINS", "SNAP", "NET", "OKTA"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK", "BITO"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "PINS", "SNAP", "NET", "OKTA", "AI", "GME"],
     "Finance": ["BAC", "WFC", "C", "USB", "TFC", "PNC", "COF", "DFS", "NU", "SE", "SQ", "PYPL", "COIN"],
-    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "KMI", "WMB", "FCX", "CLF", "NEM", "GOLD"],
-    "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT"]
+    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "KMI", "WMB", "FCX", "CLF", "NEM", "GOLD", "RIG", "XOP"],
+    "Retail & Misc": ["F", "GM", "CL", "K", "GIS", "PFE", "BMY", "KVUE", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
-# -------------------------------------------------
-# 4. SCANNER LOGIC
-# -------------------------------------------------
 def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
     try:
         stock = yf.Ticker(t)
         price = float(stock.fast_info["lastPrice"])
         if not (2.0 <= price <= 100.0): return None
         
-        # Earnings check
         next_e, e_alert = "N/A", ""
         cal = stock.calendar
         if cal is not None and 'Earnings Date' in cal:
@@ -145,29 +125,53 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, capital):
     except: return None
 
 # -------------------------------------------------
-# 5. SIDEBAR & RUN
+# 4. MAIN INTERFACE
 # -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <span>S&P 500: <span style="color:{s_c}">{spy_ch:+.2f}%</span></span>
+    <span>VIX (Fear Index): <span style="color:{v_c}">{vix_v:.2f}</span></span>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown('<p class="big-title">🧃 JuiceBox Pro</p>', unsafe_allow_html=True)
+
+# THE LEGEND (5TH GRADE LEVEL)
+with st.expander("📖 JUICEBOX LEGEND - Read This First!"):
+    st.markdown("""
+    ### 🍎 Trading Explained Simple
+    Imagine you are a landlord. You own a house (the Stock) and you are collecting rent (the Juice).
+    
+    * **🧃 Juice:** This is your "Rent Money." It's the profit you get to keep just for waiting.
+    * **🟢 Status Dots:** * **Green:** Great rent! You are getting a lot of money for a little bit of time.
+        * **Yellow:** Good rent. It's a fair deal.
+        * **Red:** Low rent. You might be working too hard for too little money.
+    * **🛡️ Cushion:** This is your "Safety Net." If the stock price falls, this is how much it can drop before you start losing your own money.
+    * **📅 Earnings Alert:** This means the company is about to share its "Report Card." The stock might jump up or down like a pogo stick, so be careful!
+    * **📉 Net Basis:** This is the "Real Price" you paid for the stock after you subtract the rent you collected.
+    """)
+
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/box.png", width=60)
     st.title("Control Panel")
     capital = st.number_input("Capital ($)", value=10000)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
-    sectors = st.multiselect("Sectors", options=list(TICKER_MAP.keys()), default=["Market ETFs", "Leveraged (3x/2x)"])
+    all_s = list(TICKER_MAP.keys())
+    sectors = st.multiselect("Sectors", options=all_s, default=all_s)
     max_days = st.slider("Max Days", 7, 45, 21)
-    min_cushion = st.slider("Cushion % (Safety)", 0, 15, 5)
-    st.divider()
-    st.error("⚖️ LEGAL: No financial advice provided.")
+    min_cushion = st.slider("Cushion %", 0, 15, 5)
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in sectors: univ.extend(TICKER_MAP[s])
     univ = list(set(univ))
-    with st.spinner(f"Harvesting premiums from {len(univ)} tickers..."):
+    with st.spinner(f"Harvesting premiums..."):
         with ThreadPoolExecutor(max_workers=25) as ex:
             results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, min_cushion, max_days, capital), univ) if r]
         st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
-if "results" in st.session_state and st.session_state.results:
+if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     st.download_button("📥 Export CSV", df.to_csv(index=False).encode('utf-8'), f"Juice_{datetime.now().date()}.csv", "text/csv", use_container_width=True)
     sel = st.dataframe(df[["Status", "Ticker", "Earnings", "Price", "Strike", "Juice ($)", "ROI %", "Expiry"]], 
@@ -181,4 +185,4 @@ if "results" in st.session_state and st.session_state.results:
             cid = f"tv_{row['Ticker']}"
             components.html(f'<div id="{cid}" style="height:500px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=520)
         with c2:
-            st.markdown(f'<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row["Dot"]}"></span><span style="font-weight:800; font-size: 12px; color: #64748b; text-transform: uppercase;">Harvest Report</span></div><p style="font-size: 24px; font-weight:800; margin-bottom:0px;">{row["Ticker"]}</p><p class="juice-val">${row["Juice ($)"]} Juice</p><hr><p style="font-size: 15px; color: #475569; line-height: 1.6;"><b>Return:</b> {row["ROI %"]}%<br><b>Net Basis:</b> ${row["Net Basis"]}<br><b>Expiry:</b> {row["Expiry"]}<br><span style="color: #ea580c;"><b>Next Earnings:</b> {row["E-Date"]}</span></p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="card"><div style="display: flex; align-items: center; margin-bottom: 8px;"><span class="dot {row["Dot"]}"></span><b>{row["Ticker"]} REPORT</b><p class="juice-val">${row["Juice ($)"]} Juice</p><hr>Return: {row["ROI %"]}%<br>Basis: ${row["Net Basis"]}<br>Earnings: {row["E-Date"]}</div>', unsafe_allow_html=True)
