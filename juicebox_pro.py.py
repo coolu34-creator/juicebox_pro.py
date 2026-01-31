@@ -8,7 +8,7 @@ import pytz
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
-# 1. APP SETUP & BRANDING
+# 1. MOBILE-FIRST APP SETUP
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
@@ -31,10 +31,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Session State
-if 'total_earned' not in st.session_state: st.session_state.total_earned = 0.0
-if 'trade_log' not in st.session_state: st.session_state.trade_log = []
-
 # -------------------------------------------------
 # 2. MARKET DATA UTILITIES (Fixes NameError)
 # -------------------------------------------------
@@ -53,10 +49,11 @@ def get_market_sentiment():
         if data.empty or len(data) < 2: return 0.0, 0.0, "#fff"
         spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
         spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
-        vix_val = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
-        return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
+        vix_v = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
+        return spy_ch, vix_v, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
+# Corrected: Defined variables before UI calls to prevent NameError
 status_text, status_class = get_market_status()
 spy_ch, v_vix, s_c = get_market_sentiment()
 
@@ -90,14 +87,12 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                 match = None
                 
                 if strategy_type == "Deep ITM Covered Call":
-                    # RESTORED CUSHION FILTER
+                    # Corrected: Re-added Cushion filter and Open Interest
                     df = chain.calls[(chain.calls["strike"] < price * (1 - min_cushion/100)) & (chain.calls["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
-                
                 elif strategy_type == "Standard OTM Covered Call":
                     df = chain.calls[(chain.calls["strike"] > price * 1.01) & (chain.calls["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=True).iloc[0]
-                
                 elif strategy_type == "Cash Secured Put":
                     df = chain.puts[(chain.puts["strike"] < price * (1 - min_cushion/100)) & (chain.puts["openInterest"] >= min_oi)]
                     if not df.empty: match = df.sort_values("strike", ascending=False).iloc[0]
@@ -109,7 +104,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
                     basis = price - premium if strategy_type != "Cash Secured Put" else float(match["strike"]) - premium
                     roi = (juice / basis) * 100
                     
-                    # CUSHION CALCULATION
+                    # Restored: Cushion calculation and Contracts needed
                     cushion_pct = ((price - basis) / price) * 100
                     juice_per_contract = juice * 100
                     contracts_needed = int(np.ceil(income_goal / juice_per_contract)) if juice_per_contract > 0 else 0
@@ -126,7 +121,7 @@ def scan_ticker(t, strategy_type, min_cushion, max_days, target_type, target_val
     except: return None
 
 # -------------------------------------------------
-# 4. INTERFACE & UI (Fixes KeyError)
+# 4. MOBILE INTERFACE & UI
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -136,14 +131,13 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.subheader("💰 Monthly Tracker")
-    income_goal = st.number_input("Target Goal ($)", value=2000)
-    st.metric("Earned So Far", f"${st.session_state.total_earned:,.2f}")
+    st.subheader("💰 Progress Tracker")
+    income_goal = st.number_input("Target Income Goal ($)", value=2000)
     
     st.divider()
-    st.subheader("🛡️ Safety Filters")
-    min_cushion = st.slider("Min Cushion %", 0, 20, 5) # RESTORED
-    max_days = st.slider("Max DTE (Days)", 7, 60, 30) # RESTORED
+    st.subheader("🛡️ Filters")
+    min_cushion = st.slider("Min Cushion %", 0, 20, 5) 
+    max_days = st.slider("Max DTE (Days)", 7, 60, 30)
     max_stock_price = st.slider("Max Price ($)", 10, 100, 100)
     min_oi = st.number_input("Min Open Interest", value=500)
     
@@ -155,7 +149,7 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 5. EXECUTION & DISPLAY
+# 5. EXECUTION & RESULTS (Fixes KeyError)
 # -------------------------------------------------
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
@@ -169,7 +163,7 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     
-    # Updated columns to avoid KeyError and show restored metrics
+    # Corrected: Column list exactly matches data keys to avoid KeyError
     display_cols = ["Status", "Ticker", "Price", "Strike", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
@@ -178,6 +172,7 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
+            # RESTORED: Interactive TradingView Chart
             cid = f"tv_{row['Ticker']}"
             components.html(f'<div id="{cid}" style="height:400px; width:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{row["Ticker"]}", "interval": "D", "theme": "light", "style": "1", "container_id": "{cid}"}});</script>', height=420)
         with c2:
@@ -191,7 +186,3 @@ if "results" in st.session_state and st.session_state.results:
                 <p><b>Contracts Needed:</b> {row['Contracts']}</p>
             </div>
             """, unsafe_allow_html=True)
-            if st.button(f"💾 LOG {row['Ticker']} AS DONE"):
-                st.session_state.total_earned += (row['Juice ($)'] * row['Contracts'])
-                st.toast(f"Logged ${row['Juice ($)'] * row['Contracts']}!")
-                st.rerun()
