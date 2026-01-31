@@ -1,68 +1,77 @@
 import yfinance as yf
 import pandas as pd
 
-def run_juice_scanner(ticker_symbol):
-    """
-    A scanner for 'In-the-Money' (ITM) covered calls.
-    It calculates the 'Safety Net' and 'Allowance Score' for a student.
-    """
-    print(f"--- 🕵️ Scanning {ticker_symbol} for the Best ITM Deals ---")
+def find_best_deals(ticker_symbol):
+    print(f"\n--- 🕵️ SCANNING: {ticker_symbol.upper()} ---")
     
-    # 1. Get Stock Data
-    stock = yf.Ticker(ticker_symbol)
+    # 1. Get the Stock Info
     try:
-        # Grabbing the most recent price
+        stock = yf.Ticker(ticker_symbol)
         current_price = stock.fast_info['last_price']
-    except Exception:
-        return "Error: Could not find that stock. Check the symbol!"
+        print(f"Current Stock Price: ${current_price:.2f}")
+    except:
+        print("❌ Error: Could not find that stock. Check the spelling!")
+        return
 
-    # 2. Get Expiration Dates (Looking for deals about 30 days away)
-    expiry_dates = stock.options
-    if not expiry_dates:
-        return "No options found for this stock."
+    # 2. Get Option Dates (We look at the soonest one)
+    options_dates = stock.options
+    if not options_dates:
+        print("❌ No options found for this stock.")
+        return
+
+    # Grab the first available date (usually about 30 days out)
+    target_date = options_dates[0] 
+    print(f"Looking at deals expiring on: {target_date}")
     
-    # We'll use the first available expiration date
-    target_expiry = expiry_dates[0]
-    chain = stock.option_chain(target_expiry)
-    calls = chain.calls
+    # Get the 'Call' options
+    calls = stock.option_chain(target_date).calls
 
-    # 3. Filter for 'In-the-Money' (Strike Price < Current Price)
-    # This means the deal has a 'Safety Net' built in.
+    # 3. Filter for 'In-the-Money' (The 'Safety Net' Strategy)
+    # We only want Strike Prices that are LOWER than the current stock price.
     itm_deals = calls[calls['strike'] < current_price].copy()
 
-    # --- THE 'JUICE' CALCULATIONS ---
+    # --- THE MATH (Simplified) ---
     
-    # How much cash the friend gives you upfront (the Premium)
-    # We use 'bid' because that is the price you can sell it for right now.
+    # A. The Instant Cash (Premium)
+    # We use 'bid' because that's what you can sell it for right now.
+    premium = itm_deals['bid']
+    strike = itm_deals['strike']
+
+    # B. The Break-Even Price (Your new 'Cost')
+    # If you buy the stock and sell the option, this is your actual cost.
+    break_even = current_price - premium
     
-    # Break-Even: What you actually paid for the stock after the fee
-    itm_deals['break_even'] = current_price - itm_deals['bid']
+    # C. The Safety Net ($)
+    # How much can the stock drop before you lose a penny?
+    itm_deals['Safety_Net_$'] = current_price - break_even
     
-    # Safety Net: How many dollars the stock can drop before you lose money
-    itm_deals['safety_net_$'] = current_price - itm_deals['break_even']
+    # D. The Profit ($)
+    # If the stock stays flat or goes up, you make this much.
+    itm_deals['Profit_$'] = (strike - break_even)
     
-    # Max Profit: If the stock is sold at the strike price
-    itm_deals['max_profit_$'] = (itm_deals['strike'] + itm_deals['bid']) - current_price
-    
-    # Allowance %: Your reward for the month!
-    itm_deals['allowance_%'] = (itm_deals['max_profit_$'] / current_price) * 100
+    # E. The Score (%)
+    # This acts like an interest rate. 
+    itm_deals['Score_%'] = (itm_deals['Profit_$'] / break_even) * 100
 
     # 4. THE GRADING SYSTEM
-    def assign_grade(row):
-        if row['allowance_%'] > 2.5: return "💎 A+ (High Reward)"
-        if row['allowance_%'] > 1.0: return "✅ B (Solid Deal)"
-        if row['allowance_%'] > 0:   return "⚠️ C (Low Reward)"
-        return "❌ F (Bad Deal)"
+    # This assigns a letter grade so you can spot good deals instantly.
+    def give_grade(score):
+        if score > 2.5: return "💎 A+ (Great)"
+        if score > 1.5: return "✅ B (Good)"
+        if score > 0.5: return "⚠️ C (Okay)"
+        return "❌ F (Skip)"
 
-    itm_deals['Grade'] = itm_deals.apply(assign_grade, axis=1)
+    itm_deals['Grade'] = itm_deals['Score_%'].apply(give_grade)
 
-    # 5. Clean up the view for the user
-    final_list = itm_deals[['strike', 'bid', 'safety_net_$', 'allowance_%', 'Grade']]
+    # 5. Clean Up and Show Results
+    # We select only the columns we care about.
+    results = itm_deals[['strike', 'bid', 'Safety_Net_$', 'Score_%', 'Grade']]
     
-    # Sorting so the best grades are at the top
-    return final_list.sort_values(by='allowance_%', ascending=False)
+    # Sort: Put the highest 'Score' at the top
+    top_deals = results.sort_values(by='Score_%', ascending=False).head(10)
+    
+    return top_deals
 
-# --- HOW TO RUN ---
-# You can change 'AAPL' to 'XOM' (Exxon) or 'COST' (Costco) 
-# since you have tracked those before!
-print(run_juice_scanner("AAPL").head(10))
+# --- RUN THE SCANNER HERE ---
+# Change "F" to any stock symbol you want (like 'AAPL', 'TSLA', 'AMD')
+print(find_best_deals("F"))
