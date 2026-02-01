@@ -16,8 +16,7 @@ st.markdown("""
     .grade-b { background:#eab308;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
     .grade-c { background:#ef4444;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
     .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);}
-    .juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
-    .muted {color:#6b7280;font-size:12px;margin-top:15px;}
+    .juice-val {color:#16a34a;font-size:32px;font-weight:800;margin:5px 0;}
     .stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
 </style>
 """, unsafe_allow_html=True)
@@ -29,6 +28,7 @@ st.markdown("""
 def get_price(t):
     try:
         tk = yf.Ticker(t)
+        # Fast info check
         fi = getattr(tk, "fast_info", None)
         if fi and "last_price" in fi: return float(fi["last_price"])
     except: pass
@@ -43,9 +43,9 @@ def mid_price(row):
     if pd.notna(bid) and pd.notna(ask) and ask > 0: return (bid + ask) / 2
     return float(lastp) if pd.notna(lastp) else 0
 
-def grade(c):
-    if c >= 12: return "🟢 A"
-    if c >= 7: return "🟡 B"
+def get_grade(total_ret):
+    if total_ret >= 6: return "🟢 A"
+    if total_ret >= 3: return "🟡 B"
     return "🔴 C"
 
 # -------------------------------------------------
@@ -53,90 +53,89 @@ def grade(c):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
-
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
-    cushion_req = st.slider("Min ITM Cushion %", 0, 30, 10) if "Deep ITM" in strategy else 0
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (5, 150))
     
     st.divider()
-    
     default_ticks = "SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, SNAP, PFE, NIO, HOOD, RKT, BAC, KVUE, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, BITO, C, GM, DAL, UBER, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, BB, PATH, U, SQ, SHOP, NU, RIVN, GRAB, SE, CCL, NCLH, RCL, SAVE, JBLU, UAL, LUV, MAR, HLT, MGM, WYNN, PENN, TLRY, CGC, CRON, ACB, MSOS, CAN, HUT, HIVE, CLSK, BTBT, WULF, SDIG, IREN, CIFR, BITF, GCT, PDD, BABA, JD, LI, XPEV, BIDU, FUTU, TME, VIPS, IQ, EDU, TAL, GOTU, NET, CRWD, OKTA, ZS, DDOG, SNOW, MDB, TEAM, ASAN, MOND, SMAR, ESTC, SPLK, NTNX, BOX, DBX, DOCU, ZM, PINS, ETSY, EBAY, DASH, ROKU, W, CHWY, CVNA, BYND, EXPE, BKNG, ABNB, LYFT, ARM, AVGO, MU, INTC, TXN, ADI, MCHP, ON, NXPI, QRVO, SWKS, TER, LRCX, AMAT, KLAC, ASML, TSM, GFS, WDC, STX, MP, ALB, SQM, LAC, CHPT, BLNK, EVGO, BE, FCEL, RUN, NOVA, ENPH, SEDG, FSLR, CSIQ, JKS, DQ, PLD, AMT, CCI, EQIX, DLR, WY, PSA, EXR, CUBE, IRM, VICI, GLPI, STAG, EPR, AGNC, NLY, CMCSA, DIS, NFLX, PARA, WBD, FOXA, SIRI, FUBO, SPOT, BOIL, UNG"
-    
-    text = st.text_area("Ticker Watchlist", value=default_ticks, height=180)
+    text = st.text_area("Ticker Watchlist", value=default_ticks, height=200)
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC
+# 4. SCANNER LOGIC (STANDARD COVERED CALL)
 # -------------------------------------------------
 def scan(t):
     try:
         price = get_price(t)
-        if not price or not (price_range[0] <= price <= price_range[1]): return None, (t, ["out_of_range"])
+        if not price or not (price_range[0] <= price <= price_range[1]): return None, (t, ["Range Out"])
         
         tk = yf.Ticker(t)
-        if not tk.options: return None, (t, ["no_options"])
+        if not tk.options: return None, (t, ["No Options"])
 
         best = None
-        # Checking nearest 2 expirations
+        # Focus on the nearest expiration (usually 7-35 days)
         for exp in tk.options[:2]:
             chain = tk.option_chain(exp)
-            is_put = strategy == "Cash Secured Put"
-            df = chain.puts if is_put else chain.calls
+            df = chain.calls
             if df.empty: continue
 
-            if strategy == "Deep ITM Covered Call":
-                cutoff = price * (1 - cushion_req / 100)
-                df = df[df["strike"] <= cutoff]
-                if df.empty: continue
-                pick = df.sort_values("strike", ascending=False).iloc[0]
-            elif strategy == "ATM Covered Call":
-                df["d"] = abs(df["strike"] - price)
-                pick = df.sort_values("d").iloc[0]
-            else: # CSP
-                df = df[df["strike"] <= price]
-                if df.empty: continue
-                df["d"] = abs(df["strike"] - price)
-                pick = df.sort_values("d").iloc[0]
-
-            strike, prem = float(pick["strike"]), mid_price(pick)
+            # Filter for OTM strikes (Above Current Price)
+            otm_df = df[df["strike"] > price].copy()
+            if otm_df.empty: continue
+            
+            # Pick the nearest OTM strike
+            pick = otm_df.sort_values("strike", ascending=True).iloc[0]
+            strike = float(pick["strike"])
+            prem = mid_price(pick)
+            
             if prem <= 0: continue
 
-            if is_put:
-                juice, collateral = prem * 100, strike * 100
-                cushion = (price - strike) / price * 100
-            else:
-                # Extrinsic value is the "juice" for Covered Calls
-                extrinsic = max(prem - max(price - strike, 0), 0)
-                juice, collateral = extrinsic * 100, price * 100
-                cushion = (price - strike) / price * 100
+            # ROI CALCULATIONS
+            juice_per_con = prem * 100
+            collateral_per_con = price * 100
             
-            if juice <= 0: continue
-            contracts = max(1, int(np.ceil(goal / juice)))
-            if contracts * collateral > acct: continue
+            yield_pct = (juice_per_con / collateral_per_con) * 100
+            upside_pct = ((strike - price) / price) * 100
+            total_return = yield_pct + upside_pct
 
-            roi = (juice / collateral) * 100
+            # Goal Logic
+            contracts = max(1, int(np.ceil(goal / juice_per_con)))
+            if (contracts * collateral_per_con) > acct:
+                # If too expensive, scale down to max possible contracts
+                contracts = int(acct // collateral_per_con)
+            
+            if contracts < 1: continue
+
             row = {
-                "Ticker": t, "Grade": grade(cushion), "Price": round(price, 2), 
-                "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2), 
-                "Contracts": contracts, "Total Juice": round(juice * contracts, 2), 
-                "Cushion %": round(cushion, 2), "ROI %": round(roi, 2), 
-                "Collateral": round(contracts * collateral, 0)
+                "Ticker": t, 
+                "Grade": get_grade(total_return), 
+                "Price": round(price, 2), 
+                "Strike": round(strike, 2), 
+                "Expiration": exp, 
+                "Juice/Con": round(juice_per_con, 2), 
+                "Contracts": contracts, 
+                "Total Juice": round(juice_per_con * contracts, 2), 
+                "Yield %": round(yield_pct, 2), 
+                "Upside %": round(upside_pct, 2), 
+                "Total Return %": round(total_return, 2),
+                "Collateral": round(contracts * collateral_per_con, 0)
             }
-            if not best or roi > best["ROI %"]: best = row
-        return (best, (t, [])) if best else (None, (t, ["no_match"]))
+            if not best or total_return > best["Total Return %"]: 
+                best = row
+                
+        return (best, (t, [])) if best else (None, (t, ["No Match"]))
     except Exception as e: return None, (t, [str(e)])
 
 # -------------------------------------------------
 # 5. UI & SCAN RUNNER
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
+st.caption("Standard Covered Call Strategy: Yield + Appreciation")
 
 if st.button("RUN SCAN ⚡", use_container_width=True):
     results, diags = [], {}
-    with st.spinner(f"Squeezing {len(tickers)} tickers..."):
+    with st.spinner(f"Scanning {len(tickers)} tickers..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     for r, (t, d) in out:
@@ -151,19 +150,19 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if df.empty: 
-        st.warning("No matches found. Try expanding your price range or lowering your goal.")
+        st.warning("No matches. Try expanding your price range or account value.")
     else:
-        df = df.sort_values("ROI %", ascending=False)
-        # Display Dataframe
+        # Show Summary Table
+        df = df.sort_values("Total Return %", ascending=False)
         sel = st.dataframe(
-            df, 
+            df[["Ticker", "Grade", "Price", "Strike", "Yield %", "Total Return %", "Total Juice"]], 
             use_container_width=True, 
             hide_index=True, 
             selection_mode="single-row", 
             on_select="rerun"
         )
         
-        # Detail View on Selection
+        # Detailed Breakdown
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
@@ -188,15 +187,24 @@ if "results" in st.session_state:
                         <h2 style="margin:0;">{r['Ticker']}</h2>
                         <span class="grade-{g_char}">{r['Grade']}</span>
                     </div>
-                    <p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Weekly Juice</p>
-                    <div class="juice-val">${r['Total Juice']:,.2f}</div>
+                    <p style="margin:10px 0 0 0; font-size:14px; color:#6b7280;">Potential Total Return</p>
+                    <div class="juice-val">{r['Total Return %']}%</div>
                     <hr>
-                    <b>Price:</b> ${r['Price']}<br>
-                    <b>Strike:</b> ${r['Strike']}<br>
-                    <b>Exp:</b> {r['Expiration']}<br>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span><b>Yield (Cash):</b></span>
+                        <span style="color:#16a34a; font-weight:700;">{r['Yield %']}%</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span><b>Max Upside:</b></span>
+                        <span style="color:#16a34a; font-weight:700;">{r['Upside %']}%</span>
+                    </div>
+                    <hr>
+                    <b>Stock Price:</b> ${r['Price']}<br>
+                    <b>Sell Strike:</b> ${r['Strike']}<br>
+                    <b>Exp Date:</b> {r['Expiration']}<br>
+                    <hr>
                     <b>Contracts:</b> {r['Contracts']}<br>
-                    <b>Cushion:</b> {r['Cushion %']}%<br>
-                    <b>ROI:</b> {r['ROI %']}%<br>
-                    <b>Collateral:</b> ${r['Collateral']:,.0f}
+                    <b>Total Premium:</b> ${r['Total Juice']:,.2f}<br>
+                    <b>Req. Collateral:</b> ${r['Collateral']:,.0f}
                 </div>
                 """, unsafe_allow_html=True)
