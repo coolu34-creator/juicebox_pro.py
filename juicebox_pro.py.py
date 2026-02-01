@@ -66,6 +66,7 @@ def get_spy_condition():
 
 @st.cache_data(ttl=3600)
 def get_earnings_info(t):
+    # FIXED: Added proper try/except block here
     try:
         tk = yf.Ticker(t)
         calendar = tk.calendar
@@ -74,7 +75,7 @@ def get_earnings_info(t):
             if isinstance(e_date, datetime):
                 if e_date < (datetime.now() + timedelta(days=45)):
                     return True, e_date.strftime('%Y-%m-%d')
-    except Exception: 
+    except: 
         return False, None
     return False, None
 
@@ -95,26 +96,26 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR (Keys Updated to v12)
+# 3. SIDEBAR (Keys Updated to v10)
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
     
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v12")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v12")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v12")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v12")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v10")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v10")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v10")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v10")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v12")
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v10")
     
     # --- DYNAMIC SLIDERS ---
     delta_val = (0.15, 0.45) 
     if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v12")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v10")
     
     cushion_val = 10 
     if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v12")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v10")
 
     # --- LEGEND ---
     st.markdown("### 📚 Strategy Legend")
@@ -128,7 +129,7 @@ with st.sidebar:
         st.info("**Cash Secured Put:** Paid to wait. Buy stock at a discount.")
 
     st.divider()
-    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_v12")
+    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_v10")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -158,7 +159,7 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # --- STRATEGY FILTERING ---
+            # --- STRATEGY LOGIC ---
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price] 
             elif strategy == "Deep ITM Covered Call":
@@ -173,13 +174,8 @@ def scan(t):
                 strike, prem = row["strike"], mid_price(row)
                 if prem <= 0: continue
 
-                # --- EXTRINSIC MATH FIX ---
-                # Calculate Intrinsic Value properly based on Option Type
-                if is_put:
-                    intrinsic = max(0, strike - price)
-                else:
-                    intrinsic = max(0, price - strike)
-                
+                # --- EXTRINSIC MATH ---
+                intrinsic = max(0, price - strike)
                 extrinsic = max(0, prem - intrinsic)
 
                 # --- DELTA FILTER ---
@@ -189,8 +185,6 @@ def scan(t):
 
                 coll_con = strike * 100 if is_put else price * 100
                 
-                # --- JUICE CALCULATION ---
-                # Deep ITM = Extrinsic Only. Others = Full Premium.
                 if strategy == "Deep ITM Covered Call":
                     juice_con = extrinsic * 100
                 else:
@@ -239,7 +233,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_v12"):
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_v10"):
     with st.spinner("Scanning market..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
@@ -251,17 +245,17 @@ if "results" in st.session_state:
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v12")
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v10")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                tv_url = "https://s3.tradingview.com/tv.js"
+                # FIXED: Clean variable to avoid syntax error
                 tv_html = f"""
                 <div id="tv" style="height:500px"></div>
-                <script src="{tv_url}"></script>
+                <script src="https://s3.tradingview.com/tv.js"></script>
                 <script>
                 new TradingView.widget({{
                     "autosize": true,
@@ -278,10 +272,9 @@ if "results" in st.session_state:
             with c2:
                 g = r["Grade"][-1].lower()
                 e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
-                
-                # Dynamic Label: Shows "Extrinsic Profit" for Deep ITM strategy
-                label_juice = "Extrinsic Profit" if strategy == "Deep ITM Covered Call" else "Total Juice"
+                ext_html = f'<div class="extrinsic-highlight">Time Value (Extrinsic): ${r["Extrinsic"]}</div><br>' if strategy == "Deep ITM Covered Call" else ""
 
+                # FIXED: Clean HTML string construction to avoid syntax error
                 card_html = f"""
 <div class="card">
     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -292,8 +285,9 @@ if "results" in st.session_state:
     <p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
     <div class="juice-val">{r['Total Return %']}%</div>
     <hr>
+    {ext_html}
     <b>Contracts:</b> {r['Contracts']}<br>
-    <b>{label_juice}:</b> ${r['Total Juice']}<br>
+    <b>Total Juice:</b> ${r['Total Juice']}<br>
     <hr>
     <b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
     <b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
