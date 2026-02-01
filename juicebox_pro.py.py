@@ -98,15 +98,18 @@ with st.sidebar:
     if strategy == "Cash Secured Put":
         put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode")
     
-    # --- DYNAMIC CUSHION SLIDER (ONLY FOR ITM) ---
     is_itm_call = strategy == "Deep ITM Covered Call"
     is_itm_put = strategy == "Cash Secured Put" and put_mode == "ITM"
-    
     cushion_val = 0
     if is_itm_call or is_itm_put:
         cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion")
 
-    st.info(f"💡 **OI 500+ Active** | Targeting: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
+    # --- NEW FILTERS ---
+    st.divider()
+    f_sound = st.toggle("Fundamental Sound Stocks", value=False, help="Filters for companies with positive earnings and analyst backing.")
+    etf_only = st.toggle("ETF Only Mode", value=False, help="Restricts search to Exchange Traded Funds for lower volatility.")
+    
+    st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f}")
 
     st.divider()
     text = st.text_area("Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="cfg_watchlist")
@@ -117,9 +120,21 @@ with st.sidebar:
 # -------------------------------------------------
 def scan(t):
     try:
+        tk = yf.Ticker(t)
+        
+        # ETF Filter
+        if etf_only:
+            if tk.info.get('quoteType') != 'ETF': return None
+            
+        # Fundamental Sound Filter
+        if f_sound:
+            info = tk.info
+            # Check for positive EPS and at least a 'hold' or better rating
+            if info.get('trailingEps', -1) <= 0: return None
+            if info.get('recommendationKey') not in ['buy', 'strong_buy', 'hold']: return None
+
         price = get_live_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None
-        tk = yf.Ticker(t)
         if not tk.options: return None
 
         today = datetime.now()
@@ -149,15 +164,12 @@ def scan(t):
 
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
-
                 if intrinsic > 0 and extrinsic <= 0.05: continue
 
                 juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
-
                 total_ret = (juice_con / coll_con) * 100
                 needed = max(1, int(np.ceil(goal_amt / (juice_con if juice_con > 0 else 1))))
-                
                 if (needed * coll_con) > acct: continue
 
                 total_juice = juice_con * needed
@@ -184,7 +196,8 @@ with st.expander("🚀 How to Use JuiceBox Pro™"):
     st.markdown("""
     * **Set Your Foundation:** Enter your Account Value in the sidebar.
     * **Define Your Goal:** Switch between **$** or **%** mode.
-    * **Choose Your "Juice" Type:** Select your strategy. Deep ITM focuses on Extrinsic time-value.
+    * **Choose Your "Juice" Type:** Select your strategy.
+    * **Apply Filters:** Toggle **Fundamental Sound** or **ETF Only** for safer plays.
     * **Run the Scan:** OI 500+ and Extrinsic calculations are applied.
     * **Analyze the Results:** **🎯 indicates weekly goal met in one trade.**
     """)
@@ -217,7 +230,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn"):
-    with st.spinner(f"Scanning for opportunities..."):
+    with st.spinner(f"Scanning for {goal_amt:,.2f} weekly goal..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
