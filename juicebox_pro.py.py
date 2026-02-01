@@ -43,12 +43,14 @@ spy_ch, v_vix, s_c = get_market_sentiment()
 # -------------------------------------------------
 # 3. SIDEBAR: SECTORS & PRECISION FILTERS
 # -------------------------------------------------
+# UPDATED: Included SOXL, BOIL, TQQQ, and others
 TICKER_MAP = {
-    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "SCHD", "ARKK"],
-    "Tech & Semi": ["AMD", "NVDA", "AAPL", "MSFT", "PLTR", "SOFI", "AFRM", "AI"],
-    "Leveraged": ["SOXL", "TQQQ", "BITX", "FAS", "SQQQ", "UVXY"],
-    "Finance & Bank": ["BAC", "WFC", "C", "GS", "JPM", "COF", "PYPL", "SQ"],
-    "Energy & Retail": ["OXY", "DVN", "XLE", "F", "TSLA", "MARA", "RIOT", "AMC"]
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "BOIL", "BITX", "TNA", "FAS", "SPXL", "SQQQ", "LABU", "UVXY", "BITO"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "SCHD", "ARKK", "VOO"],
+    "Tech & Semi": ["AMD", "NVDA", "AAPL", "MSFT", "PLTR", "SOFI", "AFRM", "AI", "TSLA", "INTC", "MU"],
+    "Finance": ["BAC", "WFC", "C", "GS", "JPM", "COF", "PYPL", "SQ", "HOOD"],
+    "Energy & Materials": ["OXY", "DVN", "XLE", "HAL", "SLB", "FCX", "CLF", "NEM"],
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT"]
 }
 
 with st.sidebar:
@@ -59,12 +61,10 @@ with st.sidebar:
     total_acc = st.number_input("Account Value ($)", value=10000, step=1000)
     
     st.divider()
-    # SECTOR FILTER
     all_sectors = list(TICKER_MAP.keys())
     selected_sectors = st.multiselect("Sectors", options=all_sectors, default=all_sectors)
     
-    # Range & Safety
-    price_range = st.slider("Share Price Range ($)", 0, 500, (10, 150))
+    price_range = st.slider("Share Price Range ($)", 0, 500, (5, 200))
     min_p, max_p = price_range
     user_cushion = st.slider("Min ITM Cushion %", 2, 25, 8) 
     max_dte = st.slider("Max DTE (Days)", 4, 15, 10)
@@ -91,7 +91,7 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
             if 4 <= dte <= dte_limit:
                 chain = stock.option_chain(exp)
                 df = chain.calls if strategy_type != "Cash Secured Put" else chain.puts
-                df = df[df["openInterest"] >= 300]
+                df = df[df["openInterest"] >= 200] # Lowered OI slightly for leveraged tickers
                 if df.empty: continue
                 
                 if "ITM" in strategy_type:
@@ -126,16 +126,18 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
+    # DYNAMIC UNIVERSE: Pulls from selected sectors
     univ = []
-    for s in selected_sectors: univ.extend(TICKER_MAP[s])
-    with ThreadPoolExecutor(max_workers=15) as ex:
+    for s in selected_sectors:
+        univ.extend(TICKER_MAP[s])
+    
+    with ThreadPoolExecutor(max_workers=20) as ex:
         results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, max_dte, min_p, max_p), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
     display_cols = ["Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
-    
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
@@ -156,12 +158,12 @@ if "results" in st.session_state and st.session_state.results:
         with c2:
             st.markdown(f"""
             <div class="card">
-                <b>{row['Ticker']} Summary</b><br>
+                <b>{row['Ticker']} Leveraged Play</b><br>
                 <p style="color:#2563eb; font-weight:700;">Premium: ${row['Premium ($)']}</p>
                 <p class="juice-val">Juice: ${row['Juice ($)']}</p>
                 <hr>
                 <b>Strike:</b> ${row['Strike']}<br>
                 <b>Cushion:</b> {row['Cushion %']}%<br>
-                <b>Time:</b> {row['DTE']} Days
+                <b>Capital Req:</b> ${row['Capital Req']:,}
             </div>
             """, unsafe_allow_html=True)
