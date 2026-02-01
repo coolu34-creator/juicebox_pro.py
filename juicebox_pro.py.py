@@ -45,7 +45,7 @@ def get_market_sentiment():
 spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SIDEBAR: GOALS, SECTORS & FUNDAMENTALS
+# 3. SIDEBAR: CONDITIONAL UI & GOALS
 # -------------------------------------------------
 TICKER_MAP = {
     "Leveraged (3x/2x)": ["SOXL", "TQQQ", "BOIL", "BITX", "TNA", "FAS", "SPXL", "SQQQ", "UVXY"],
@@ -69,12 +69,18 @@ with st.sidebar:
     st.divider()
     selected_sectors = st.multiselect("Sectors", options=list(TICKER_MAP.keys()), default=list(TICKER_MAP.keys()))
     price_range = st.slider("Price Range ($)", 0, 500, (5, 200))
-    user_cushion = st.slider("Min ITM Cushion %", 2, 25, 8) 
+    
+    # NEW: Strategy Selection first to control UI
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
+    
+    # CONDITIONAL UI: Only shows cushion if Deep ITM is chosen
+    user_cushion = 0
+    if "Deep ITM" in strategy:
+        user_cushion = st.slider("Min ITM Cushion %", 2, 25, 8)
+    
     max_dte = st.slider("Max DTE (Days)", 4, 15, 10)
     
     st.divider()
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
-    
     risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Middle Road")
     yield_map = {"Conservative": 0.0025, "Middle Road": 0.006, "Aggressive": 0.0125}
     weekly_goal = total_acc * yield_map[risk_mode]
@@ -88,7 +94,6 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_p, ma
         stock = yf.Ticker(t)
         info = stock.info
         
-        # Fundamental Filter
         if "ETF" not in info.get('quoteType', ''):
             margin = info.get('profitMargins', 0) * 100
             pe = info.get('trailingPE', 0)
@@ -106,16 +111,18 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_p, ma
                 df = df[df["openInterest"] >= 200]
                 if df.empty: continue
                 
+                # Logic per Strategy
                 if "Deep ITM" in strategy_type:
                     match_df = df[df["strike"] < price * (1 - (cushion_limit / 100))]
+                    if match_df.empty: continue
+                    match = match_df.sort_values("strike", ascending=False).iloc[0]
                 elif "ATM" in strategy_type:
                     df["diff"] = abs(df["strike"] - price)
-                    match_df = df.sort_values("diff")
+                    match = df.sort_values("diff").iloc[0]
                 else: # Put logic
                     match_df = df[df["strike"] < price]
-                
-                if match_df.empty: continue
-                match = match_df.iloc[0]
+                    if match_df.empty: continue
+                    match = match_df.sort_values("strike", ascending=False).iloc[0]
 
                 prem = float(match["lastPrice"])
                 strike = float(match["strike"])
@@ -130,8 +137,7 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_p, ma
                     "Ticker": t, "Grade": grade, "Price": round(price, 2), "Strike": strike,
                     "Strike Date": exp, "Premium ($)": round(prem * 100, 2), 
                     "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/basis)*100, 2), 
-                    "Cushion %": round(cushion, 2), "DTE": dte, "Contracts": contracts,
-                    "Margin %": round(margin, 1), "P/E": round(pe, 1)
+                    "Cushion %": round(cushion, 2), "DTE": dte, "Contracts": contracts
                 }
     except: return None
 
