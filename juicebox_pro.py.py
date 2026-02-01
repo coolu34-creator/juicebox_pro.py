@@ -81,7 +81,6 @@ with st.sidebar:
     st.header("🧃 Configuration")
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     
-    # --- DUAL GOAL: PERCENTAGE & MONEY ---
     c1, c2 = st.columns(2)
     with c1:
         goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1)
@@ -131,7 +130,7 @@ def scan(t):
             elif strategy == "Cash Secured Put":
                 if put_mode == "OTM":
                     df = df[df["strike"] <= price * (1 - cushion_val / 100)]
-                else: # ITM Put Mode
+                else:
                     df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
             for _, row in df.iterrows():
@@ -139,13 +138,11 @@ def scan(t):
                 open_int = row.get("openInterest", 0)
                 if open_int < 500 or total_prem <= 0: continue
 
-                # Extrinsic Math (Checking for time value)
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
                 if intrinsic > 0 and extrinsic <= 0.05: continue
 
-                # ITM Logic: Juice is Extrinsic only
                 juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
 
@@ -177,7 +174,6 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
     with st.spinner(f"Scanning for {goal_pct}% yield opportunities..."):
-        # Fixed IndentationError: Code block must follow spinner
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
