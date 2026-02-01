@@ -24,6 +24,17 @@ st.markdown("""
 # -------------------------------------------------
 # 2. HELPERS
 # -------------------------------------------------
+@st.cache_data(ttl=3600) # Fundamentals cached longer (1 hour)
+def is_healthy(t):
+    try:
+        tk = yf.Ticker(t)
+        info = tk.info
+        # Check Net Income or EBITDA to ensure company isn't bleeding cash
+        net_income = info.get("netIncomeToCommon", 0)
+        return net_income > 0
+    except:
+        return True # Default to True if data missing to avoid over-filtering
+
 @st.cache_data(ttl=300)
 def get_price(t):
     try:
@@ -63,6 +74,9 @@ with st.sidebar:
         "Cash Secured Put"
     ])
     
+    # NEW FUNDAMENTAL TOGGLE
+    filter_fundamentals = st.toggle("Positive Fundamentals Only", value=False, help="Filters for profitable companies (Net Income > 0)")
+    
     cushion_req = st.slider("Min ITM Cushion %", 0, 30, 10) if "Deep ITM" in strategy else 0
 
     st.divider()
@@ -75,6 +89,10 @@ with st.sidebar:
 # -------------------------------------------------
 def scan(t):
     try:
+        # Check Fundamentals if toggle is ON
+        if filter_fundamentals:
+            if not is_healthy(t): return None, (t, ["bad_fundamentals"])
+
         price = get_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None, (t, ["out_of_range"])
         
@@ -88,7 +106,6 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # Strategy Selection Logic
             if strategy == "Standard Covered Call (OTM)":
                 df = df[df["strike"] > price]
                 if df.empty: continue
@@ -117,7 +134,6 @@ def scan(t):
                 upside_pct, total_ret = 0, yield_pct
                 cushion = ((price - strike) / price) * 100
             else:
-                # Extrinsic for CC
                 extrinsic = max(prem - max(price - strike, 0), 0)
                 juice, collateral = extrinsic * 100, price * 100
                 yield_pct = (juice / collateral) * 100
@@ -160,7 +176,7 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if df.empty:
-        st.warning("No matches found.")
+        st.warning("No matches found. Try disabling the fundamental filter or expanding your price range.")
     else:
         df = df.sort_values("Total Return %", ascending=False)
         sel = st.dataframe(df, use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
@@ -173,8 +189,6 @@ if "results" in st.session_state:
                 components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv", "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]}});</script>""", height=510)
             with c2:
                 g_char = r["Grade"][-1].lower()
-                
-                # Dynamic Metric Display
                 main_metric = f"{r['Total Return %']}%" if "Covered Call" in strategy else f"{r['Yield %']}%"
                 label = "Potential Total Return" if "Covered Call" in strategy else "Yield (Premium)"
                 
