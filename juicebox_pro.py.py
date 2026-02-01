@@ -66,6 +66,7 @@ def get_spy_condition():
 
 @st.cache_data(ttl=3600)
 def get_earnings_info(t):
+    # FIXED: Added proper try/except block here
     try:
         tk = yf.Ticker(t)
         calendar = tk.calendar
@@ -73,4 +74,47 @@ def get_earnings_info(t):
             e_date = calendar.iloc[0, 0] 
             if isinstance(e_date, datetime):
                 if e_date < (datetime.now() + timedelta(days=45)):
-                    return True, e_date
+                    return True, e_date.strftime('%Y-%m-%d')
+    except: 
+        return False, None
+    return False, None
+
+@st.cache_data(ttl=60)
+def get_live_price(t):
+    try:
+        tk = yf.Ticker(t)
+        fi = getattr(tk, "fast_info", None)
+        if fi and "last_price" in fi: return float(fi["last_price"])
+        hist = tk.history(period="1d", interval="1m")
+        if not hist.empty: return float(hist["Close"].iloc[-1])
+    except: pass
+    return None
+
+def mid_price(row):
+    bid, ask, lastp = row.get("bid"), row.get("ask"), row.get("lastPrice")
+    if pd.notna(bid) and pd.notna(ask) and ask > 0: return (bid + ask) / 2
+    return float(lastp) if pd.notna(lastp) else 0
+
+# -------------------------------------------------
+# 3. SIDEBAR (Keys Updated to v10)
+# -------------------------------------------------
+with st.sidebar:
+    st.header("🧃 Configuration")
+    
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v10")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v10")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v10")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v10")
+    
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v10")
+    
+    # --- DYNAMIC SLIDERS ---
+    delta_val = (0.15, 0.45) 
+    if strategy == "Standard OTM Covered Call":
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v10")
+    
+    cushion_val = 10 
+    if strategy == "Deep ITM Covered Call":
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v10")
+
+    # --- LEG
