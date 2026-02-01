@@ -81,12 +81,15 @@ with st.sidebar:
     st.header("🧃 Configuration")
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct")
     
-    c1, c2 = st.columns(2)
-    with c1:
+    # --- GOAL TYPE SLIDE TOGGLE ---
+    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type")
+    
+    if goal_type == "Percentage (%)":
         goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct")
-    with c2:
-        calc_goal = acct * (goal_pct / 100)
-        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, calc_goal, step=10.0, key="cfg_goal_amt")
+        goal_amt = acct * (goal_pct / 100)
+    else:
+        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt")
+        goal_pct = (goal_amt / acct) * 100
     
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng")
     dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng")
@@ -97,7 +100,7 @@ with st.sidebar:
         put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode")
     
     cushion_val = st.slider("Min Cushion %", 0, 50, 10, key="cfg_cushion") if strategy != "ATM Covered Call" else 0
-    st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f}")
+    st.info(f"💡 **OI 500+ Active** | Targeting: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
     st.divider()
     text = st.text_area("Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="cfg_watchlist")
@@ -151,7 +154,6 @@ def scan(t):
                 
                 if (needed * coll_con) > acct: continue
 
-                # Determine if goal is met
                 total_juice = juice_con * needed
                 goal_met_icon = " 🎯" if total_juice >= goal_amt else ""
 
@@ -175,10 +177,10 @@ st.title("🧃 JuiceBox Pro")
 with st.expander("🚀 How to Use JuiceBox Pro™"):
     st.markdown("""
     * **Set Your Foundation:** Enter your Account Value in the sidebar.
-    * **Define Your Goal:** Use the Weekly Goal % or $ fields.
-    * **Choose Your "Juice" Type:** Select a strategy from the dropdown.
-    * **Run the Scan:** Click RUN LIVE SCAN ⚡. OI 500+ and Extrinsic Value calculations are applied.
-    * **Analyze the Results:** Click a row to see the TradingView chart and premium breakdown. **🎯 indicates weekly goal met in one trade.**
+    * **Define Your Goal:** Switch between **$** or **%** mode. The app calculates required contracts automatically.
+    * **Choose Your "Juice" Type:** Select your strategy. Deep ITM focuses on Extrinsic time-value.
+    * **Run the Scan:** OI 500+ and Extrinsic calculations are applied to your watchlist.
+    * **Analyze the Results:** **🎯 indicates weekly goal met in one trade.**
     """)
 
 with st.expander("📚 The JuiceBox Legend"):
@@ -209,7 +211,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn"):
-    with st.spinner(f"Scanning for {goal_pct}% yield opportunities..."):
+    with st.spinner(f"Scanning for {goal_amt:,.2f} weekly goal..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
