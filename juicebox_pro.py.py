@@ -66,7 +66,6 @@ def get_spy_condition():
 
 @st.cache_data(ttl=3600)
 def get_earnings_info(t):
-    # FIXED: Valid try/except block
     try:
         tk = yf.Ticker(t)
         calendar = tk.calendar
@@ -96,26 +95,26 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR (Keys Updated to v11)
+# 3. SIDEBAR (Keys Updated to v12)
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
     
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v11")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v11")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v11")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v11")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v12")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v12")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v12")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v12")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v11")
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v12")
     
     # --- DYNAMIC SLIDERS ---
     delta_val = (0.15, 0.45) 
     if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v11")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v12")
     
     cushion_val = 10 
     if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v11")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v12")
 
     # --- LEGEND ---
     st.markdown("### 📚 Strategy Legend")
@@ -129,7 +128,7 @@ with st.sidebar:
         st.info("**Cash Secured Put:** Paid to wait. Buy stock at a discount.")
 
     st.divider()
-    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_v11")
+    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_v12")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -159,13 +158,12 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # --- STRATEGY LOGIC ---
+            # --- STRATEGY FILTERING ---
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price] 
             elif strategy == "Deep ITM Covered Call":
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)] 
             elif strategy == "ATM Covered Call":
-                # FIXED: Force Closest Strike
                 df["dist"] = abs(df["strike"] - price)
                 df = df.sort_values("dist").head(1)
             elif strategy == "Cash Secured Put":
@@ -175,8 +173,13 @@ def scan(t):
                 strike, prem = row["strike"], mid_price(row)
                 if prem <= 0: continue
 
-                # --- EXTRINSIC MATH ---
-                intrinsic = max(0, price - strike)
+                # --- EXTRINSIC MATH FIX ---
+                # Calculate Intrinsic Value properly based on Option Type
+                if is_put:
+                    intrinsic = max(0, strike - price)
+                else:
+                    intrinsic = max(0, price - strike)
+                
                 extrinsic = max(0, prem - intrinsic)
 
                 # --- DELTA FILTER ---
@@ -186,6 +189,8 @@ def scan(t):
 
                 coll_con = strike * 100 if is_put else price * 100
                 
+                # --- JUICE CALCULATION ---
+                # Deep ITM = Extrinsic Only. Others = Full Premium.
                 if strategy == "Deep ITM Covered Call":
                     juice_con = extrinsic * 100
                 else:
@@ -234,11 +239,10 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_v11"):
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_v12"):
     with st.spinner("Scanning market..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
-    # FIXED: Check for None to prevent DataFrame ambiguous truth error
     st.session_state.results = [r for r in out if r is not None]
 
 if "results" in st.session_state:
@@ -247,14 +251,13 @@ if "results" in st.session_state:
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v11")
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v12")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                # FIXED: Defined as variable to prevent f-string syntax error
                 tv_url = "https://s3.tradingview.com/tv.js"
                 tv_html = f"""
                 <div id="tv" style="height:500px"></div>
@@ -275,25 +278,25 @@ if "results" in st.session_state:
             with c2:
                 g = r["Grade"][-1].lower()
                 e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
-                ext_html = f'<div class="extrinsic-highlight">Time Value (Extrinsic): ${r["Extrinsic"]}</div><br>' if strategy == "Deep ITM Covered Call" else ""
+                
+                # Dynamic Label: Shows "Extrinsic Profit" for Deep ITM strategy
+                label_juice = "Extrinsic Profit" if strategy == "Deep ITM Covered Call" else "Total Juice"
 
-                # FIXED: HTML constructed cleanly without indentation
                 card_html = f"""
 <div class="card">
-<div style="display:flex; justify-content:space-between; align-items:center;">
-<h2 style="margin:0;">{r['Ticker']}</h2>
-<span class="grade-{g}">{r['Grade']}</span>
-</div>
-{e_html}
-<p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
-<div class="juice-val">{r['Total Return %']}%</div>
-<hr>
-{ext_html}
-<b>Contracts:</b> {r['Contracts']}<br>
-<b>Total Juice:</b> ${r['Total Juice']}<br>
-<hr>
-<b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
-<b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h2 style="margin:0;">{r['Ticker']}</h2>
+        <span class="grade-{g}">{r['Grade']}</span>
+    </div>
+    {e_html}
+    <p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
+    <div class="juice-val">{r['Total Return %']}%</div>
+    <hr>
+    <b>Contracts:</b> {r['Contracts']}<br>
+    <b>{label_juice}:</b> ${r['Total Juice']}<br>
+    <hr>
+    <b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
+    <b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
 </div>
 """
                 st.markdown(card_html, unsafe_allow_html=True)
