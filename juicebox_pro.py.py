@@ -158,7 +158,7 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            # Fix: Triple quotes to prevent f-string literal errors
+            # Fix: Triple quotes to handle JavaScript characters without unterminated literal errors
             components.html(f"""
                 <div id="tv" style="height:400px;"></div>
                 <script src="https://s3.tradingview.com/tv.js"></script>
