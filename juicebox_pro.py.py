@@ -12,6 +12,7 @@ import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import textwrap
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
@@ -25,10 +26,10 @@ st.markdown("""
     .grade-a { background:#22c55e;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
     .grade-b { background:#eab308;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
     .grade-c { background:#ef4444;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
-    .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); color: #1f2937;}
+    .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); color: #1f2937; margin-top: 10px;}
     .juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
     .stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
-    .earnings-alert {color: #f97316; font-weight: bold; font-size: 14px; margin-bottom: 5px;}
+    .earnings-alert {color: #f97316; font-weight: bold; font-size: 14px; margin-bottom: 5px; background: #fff7ed; padding: 5px; border-radius: 6px;}
     .disclaimer {font-size: 11px; color: #9ca3af; line-height: 1.4; margin-top: 30px; padding: 20px; border-top: 1px solid #eee;}
 </style>
 """, unsafe_allow_html=True)
@@ -44,6 +45,7 @@ def get_earnings_info(t):
         if calendar is not None and not calendar.empty:
             e_date = calendar.iloc[0, 0] 
             if isinstance(e_date, datetime):
+                # Returns True if earnings are within 45 days
                 if e_date < (datetime.now() + timedelta(days=45)):
                     return True, e_date.strftime('%Y-%m-%d')
     except: pass
@@ -66,34 +68,36 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR & DYNAMIC UI
+# 3. SIDEBAR (Fixed Unique Keys)
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="buc_acct_input")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="buc_goal_input")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="buc_price_range")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="buc_dte_range")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="buc_strategy_select")
+    # Unique keys prevent "DuplicateElementId" errors
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte")
     
-    # Dynamic Controls: Delta for Standard, Cushion for ITM
-    delta_val = (0.15, 0.45)
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat")
+    
+    # --- DYNAMIC SLIDERS ---
+    delta_val = (0.15, 0.45) # Default
     if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="buc_delta_slider")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta")
     
-    cushion_val = 10
+    cushion_val = 10 # Default
     if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="buc_itm_cushion")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion")
 
-    # Legend Logic
+    # --- STRATEGY LEGEND ---
     st.markdown("### 📚 Strategy Legend")
     if strategy == "Standard OTM Covered Call":
-        st.info("**Standard OTM:** Targets growth + premium. Selects strikes above market price.")
+        st.info("**Standard OTM:** Targets growth + premium. Selects strikes ABOVE market price.")
     elif strategy == "Deep ITM Covered Call":
-        st.success("**Deep ITM:** Maximizes downside protection ('Cushion'). Targets income over growth.")
+        st.success("**Deep ITM:** Maximizes safety ('Cushion'). Targets strikes BELOW market price.")
     elif strategy == "ATM Covered Call":
-        st.warning("**ATM:** High premium but zero room for stock growth before assignment.")
+        st.warning("**ATM:** High premium, but zero room for stock growth before assignment.")
     else:
         st.info("**Cash Secured Put:** Paid to wait. Collects rent while waiting to buy at a discount.")
 
@@ -128,6 +132,7 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
+            # Strategy Strike Filtering
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
             elif strategy == "Deep ITM Covered Call":
@@ -137,6 +142,7 @@ def scan(t):
                 strike, prem = row["strike"], mid_price(row)
                 if prem <= 0: continue
 
+                # Delta Prob check (only for Standard)
                 approx_delta = 1.0 - abs(strike - price) / price
                 if strategy == "Standard OTM Covered Call":
                     if not (delta_val[0] <= approx_delta <= delta_val[1]): continue
@@ -168,14 +174,15 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
     with st.spinner("Processing live market data..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
-    st.session_state.results = [r for r in out if r]
+    # FIXED: Check 'r is not None' to avoid DataFrame truth value error
+    st.session_state.results = [r for r in out if r is not None]
 
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
-        # Fixed syntax error from image_326c39.png
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
+        
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
         
         if sel.selection.rows:
@@ -186,16 +193,17 @@ if "results" in st.session_state:
                 components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['RawT']}", "interval": "D", "theme": "light", "container_id": "tv", "studies": ["BB@tv-basicstudies"]}});</script>""", height=510)
             with c2:
                 g = r["Grade"][-1].lower()
-                e_html = f'<p class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</p>' if r['HasE'] else ""
-                # Use unsafe_allow_html=True to fix raw code display from image_316d78.png
-                st.markdown(f"""
+                e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
+                
+                # FIXED: HTML rendering issue by using textwrap.dedent and unsafe_allow_html
+                card_html = textwrap.dedent(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h2 style="margin:0;">{r['Ticker']}</h2>
                         <span class="grade-{g}">{r['Grade']}</span>
                     </div>
                     {e_html}
-                    <p style="margin:0; font-size:14px; color:#6b7280;">Potential Total Return</p>
+                    <p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
                     <div class="juice-val">{r['Total Return %']}%</div>
                     <hr>
                     <b>Contracts:</b> {r['Contracts']}<br>
@@ -204,6 +212,7 @@ if "results" in st.session_state:
                     <b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
                     <b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
                 </div>
-                """, unsafe_allow_html=True)
+                """)
+                st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings scheduled within 45 days. Trading involves risk.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings scheduled within 45 days.</div>""", unsafe_allow_html=True)
