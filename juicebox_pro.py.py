@@ -84,10 +84,14 @@ with st.sidebar:
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
     dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30))
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"])
-    cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10) if strategy == "Deep ITM Covered Call" else 0
     
-    # New Filter Info
-    st.info("💡 **Liquidity Filter Active:** Scanning for contracts with **500+** Open Interest.")
+    # --- ADDED PUT TOGGLE ---
+    put_mode = "OTM"
+    if strategy == "Cash Secured Put":
+        put_mode = st.radio("Put Strategy Mode", ["OTM (Safe)", "ITM (Extrinsic Focus)"], horizontal=True)
+    
+    cushion_val = st.slider("Min Cushion %", 0, 50, 10) if strategy != "ATM Covered Call" else 0
+    st.info("💡 **Liquidity Filter Active:** OI 500+")
 
     st.divider()
     text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
@@ -111,30 +115,33 @@ def scan(t):
 
             chain = tk.option_chain(exp)
             is_put = strategy == "Cash Secured Put"
-            df = chain.calls if not is_put else chain.puts
+            df = chain.puts if is_put else chain.calls
             
+            # Filter logic
             if strategy == "Deep ITM Covered Call":
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)]
             elif strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
+            elif strategy == "Cash Secured Put":
+                if "OTM" in put_mode:
+                    df = df[df["strike"] <= price * (1 - cushion_val / 100)]
+                else: # ITM Put mode
+                    df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
             for _, row in df.iterrows():
                 strike, total_prem = row["strike"], mid_price(row)
                 open_int = row.get("openInterest", 0)
-                
-                # --- LIQUIDITY FILTER (500+ Open Interest) ---
-                if open_int < 500: continue
-                if total_prem <= 0: continue
+                if open_int < 500 or total_prem <= 0: continue
 
-                # --- EXTRINSIC & INTRINSIC CALC ---
+                # --- EXTRINSIC MATH ---
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
-                # Time value check for ITM
-                if strategy == "Deep ITM Covered Call" and extrinsic <= 0.05: continue
+                # Filter: Ensure time value exists
+                if intrinsic > 0 and extrinsic <= 0.05: continue
 
-                # Juice extraction: Extrinsic only for ITM
-                juice_con = extrinsic * 100 if strategy == "Deep ITM Covered Call" else total_prem * 100
+                # Juice extraction
+                juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
 
                 # Return Calc
@@ -167,7 +174,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
-    with st.spinner("Filtering for liquid premiums (OI 500+)..."):
+    with st.spinner("Analyzing premiums..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     st.session_state.results = [r for r in out if r is not None]
@@ -176,7 +183,6 @@ if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
-        # Added OI column to table
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
         
@@ -193,15 +199,15 @@ if "results" in st.session_state:
                 <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
                 <div class="juice-val">{r['Total Return %']}%</div>
                 <hr>
-                <b>Open Interest:</b> {r['OI']:,}<br>
+                <b>OI:</b> {r['OI']:,} | <b>Strike:</b> ${r['Strike']}<br>
                 <b>Breakdown (per contract):</b><br>
-                Extrinsic (Time): ${r['Extrinsic']}<br>
-                Intrinsic (Built-in): ${r['Intrinsic']}<br>
-                Total Prem: ${r['Total Prem']}<br>
+                Extrinsic (Juice): ${r['Extrinsic']}<br>
+                Intrinsic: ${r['Intrinsic']}<br>
+                Total: ${r['Total Prem']}<br>
                 <hr>
                 <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']}<br>
                 <b>Collateral:</b> ${r['Collateral']:,.0f}
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. 500+ OI filter enabled.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. OI 500+ filter enabled.</div>""", unsafe_allow_html=True)
