@@ -18,7 +18,7 @@ st.markdown("""
 .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);}
 .juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
 .muted {color:#6b7280;font-size:12px;margin-top:15px;}
-.stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important;}
+.stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,14 +74,10 @@ with st.sidebar:
 
     st.divider()
     
-    # --- EXPANDED TICKER LIST ($2 - $100 RANGE) ---
-    # Includes: Mid-cap tech, Retailers, Pharma, Energy, and popular Option ETFs
+    # Expanded Ticker List ($2 - $100 focus)
     default_tickers = [
-        # $2 - $10 (High Volatility/Speculative)
         "SOFI", "PLUG", "LUMN", "OPEN", "BBAI", "CLOV", "MVIS", "MPW",
-        # $10 - $50 (Mid-Caps & High-Volume)
         "PLTR", "AAL", "F", "SNAP", "PFE", "NIO", "HOOD", "RKT", "BAC", "KVUE", "T", "VZ",
-        # $50 - $100 (Established Blue Chips & ETFs)
         "AAPL", "AMD", "TSLA", "PYPL", "KO", "O", "TQQQ", "SOXL", "BITO", "C", "GM", "DAL", "UBER", "MARA"
     ]
     
@@ -95,16 +91,12 @@ def scan(t):
     try:
         price = get_price(t)
         if not price: return None, (t, ["no_price"])
-        
-        # We only want stocks between $2 and $100
-        if not (2 <= price <= 100):
-            return None, (t, ["out_of_price_range"])
+        if not (2 <= price <= 100): return None, (t, ["out_of_price_range"])
         
         tk = yf.Ticker(t)
         if not tk.options: return None, (t, ["no_options"])
 
         best = None
-        # Check the 2 closest expiration cycles
         for exp in tk.options[:2]:
             chain = tk.option_chain(exp)
             is_put = strategy == "Cash Secured Put"
@@ -131,13 +123,14 @@ def scan(t):
             if is_put:
                 juice = prem * 100
                 collateral = strike * 100
+                cushion = (price - strike) / price * 100
             else:
                 intrinsic = max(price - strike, 0)
                 extrinsic = max(prem - intrinsic, 0)
                 juice = extrinsic * 100
                 collateral = price * 100
+                cushion = (price - strike) / price * 100
             
-            cushion = ((price - strike) / price * 100) if not is_put else ((strike - price) / price * 100)
             if juice <= 0: continue
 
             contracts = max(1, int(np.ceil(goal / juice)))
@@ -145,7 +138,7 @@ def scan(t):
 
             roi = (juice / collateral) * 100
             row = {
-                "Ticker": t, "Grade": grade(abs(cushion)), "Price": round(price, 2),
+                "Ticker": t, "Grade": grade(cushion), "Price": round(price, 2),
                 "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2),
                 "Contracts": contracts, "Total Juice": round(juice * contracts, 2),
                 "Cushion %": round(cushion, 2), "ROI %": round(roi, 2),
@@ -160,20 +153,17 @@ def scan(t):
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-with st.expander("📖 HOW TO USE THIS SCANNER", expanded=False):
+with st.expander("📖 HOW TO USE THIS SCANNER"):
     st.markdown("""
-    ### 1. Set Your Goals
-    Enter your **Account Value** and **Weekly Goal** in the sidebar. 
-    
-    ### 2. Strategy Guide
-    * **Deep ITM Call:** Defensive. You sell a strike far below the current price to "lock in" safety.
-    * **ATM Call:** Balanced. Selling at the current price for higher premium but less protection.
-    * **Cash Secured Put:** Bullish/Neutral. Getting paid to wait to buy a stock at a discount.
-    
-    ### 3. Safety Grades
-    * 🟢 **A (12%+ Cushion):** Low risk of the stock dropping past your strike.
-    * 🟡 **B (7-12% Cushion):** Moderate risk.
-    * 🔴 **C (<7% Cushion):** High risk; stock doesn't have to move much to hit your strike.
+    ### Quick Setup
+    1. **Account Value**: Your available cash for trading.
+    2. **Weekly Goal**: The income you want to generate.
+    3. **Run Scan**: The tool finds the best ROI trades you can afford.
+
+    ### Safety Grades
+    * 🟢 **A (12%+ Cushion)**: High safety margin.
+    * 🟡 **B (7-12% Cushion)**: Balanced risk/reward.
+    * 🔴 **C (<7% Cushion)**: High yield, low safety.
     """)
 
 if st.button("RUN SCAN ⚡", use_container_width=True):
@@ -190,4 +180,54 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 # -------------------------------------------------
 # 6. RESULTS & CHARTING
 # -------------------------------------------------
-if "
+if "results" in st.session_state:
+    df = pd.DataFrame(st.session_state.results)
+    if df.empty:
+        st.warning("No qualifying trades found. Adjust your filters or goals.")
+    else:
+        df = df.sort_values("ROI %", ascending=False)
+        sel = st.dataframe(df, use_container_width=True, hide_index=True,
+                            selection_mode="single-row", on_select="rerun")
+
+        if sel.selection.rows:
+            r = df.iloc[sel.selection.rows[0]]
+            st.divider()
+            c1, c2 = st.columns([2, 1])
+
+            with c1:
+                components.html(f"""
+                <div id="tv" style="height:500px"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                  "autosize": true, "symbol": "{r['Ticker']}", "interval": "D",
+                  "theme": "light", "style": "1", "container_id": "tv",
+                  "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]
+                }});
+                </script>
+                """, height=510)
+
+            with c2:
+                g_char = r["Grade"][-1].lower()
+                st.markdown(f"""
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2 style="margin:0;">{r['Ticker']}</h2>
+                        <span class="grade-{g_char}">{r['Grade']}</span>
+                    </div>
+                    <p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Weekly Juice</p>
+                    <div class="juice-val">${r['Total Juice']:,.2f}</div>
+                    <hr>
+                    <b>Current Price:</b> ${r['Price']}<br>
+                    <b>Target Strike:</b> ${r['Strike']}<br>
+                    <b>Expiration:</b> {r['Expiration']}<br>
+                    <b>Contracts:</b> {r['Contracts']}<br>
+                    <b>Downside Cushion:</b> {r['Cushion %']}%<br>
+                    <b>Expected ROI:</b> {r['ROI %']}%<br>
+                    <b>Collateral:</b> ${r['Collateral']:,.0f}
+                </div>
+                """, unsafe_allow_html=True)
+
+    if show_diag:
+        with st.expander("System Logs"):
+            st.write(st.session_state.diags)
