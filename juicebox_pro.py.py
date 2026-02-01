@@ -59,10 +59,8 @@ with st.sidebar:
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
 
-    if acct > 0 and goal > acct * 0.05:
-        st.error("⚠️ Aggressive Goal: Target is >5% of account per week.")
-    elif acct > 0 and goal > acct * 0.02:
-        st.warning("⚠️ High Yield: Target is >2% of account per week.")
+    # NEW: Price Range Slider
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
 
     strategy = st.selectbox(
         "Strategy",
@@ -74,14 +72,10 @@ with st.sidebar:
 
     st.divider()
     
-    # Expanded Ticker List ($2 - $100 focus)
-    default_tickers = [
-        "SOFI", "PLUG", "LUMN", "OPEN", "BBAI", "CLOV", "MVIS", "MPW",
-        "PLTR", "AAL", "F", "SNAP", "PFE", "NIO", "HOOD", "RKT", "BAC", "KVUE", "T", "VZ",
-        "AAPL", "AMD", "TSLA", "PYPL", "KO", "O", "TQQQ", "SOXL", "BITO", "C", "GM", "DAL", "UBER", "MARA"
-    ]
+    # 200 Ticker List
+    default_tickers = "SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, SNAP, PFE, NIO, HOOD, RKT, BAC, KVUE, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, BITO, C, GM, DAL, UBER, MARA, RIOT, COIN, DKNG, LCID, PENT, AI, GME, AMC, BB, PATH, U, AFrm, COVA, SQ, SHOP, NU, RIVN, GRAB, SE, CCL, NCLH, RCL, SAVE, JBLU, UAL, LUV, MAR, HLT, MGM, WYNN, PENN, TLRY, CGC, CRON, ACB, MSOS, GRWG, CAN, HUT, HIVE, CLSK, BTBT, WULF, SDIG, IREN, CIFR, GREE, CORZ, BTDR, BITF, GCT, PDD, BABA, JD, LI, XPEV, BIDU, FUTU, TME, VIPS, IQ, EDU, TAL, GOTU, YALA, EM, EH, ATAT, ZK, KGEA, S, NET, CRWD, OKTA, ZS, DDOG, SNOW, MDB, TEAM, ASAN, MOND, SMAR, ESTC, SPLK, NTNX, BOX, DBX, DOCU, ZM, WORK, PINS, ETSY, EBAY, DASH, ROKU, W, CHWY, CVNA, OSTK, BYND, EXPE, BKNG, ABNB, LYFT, GRUB, CART, INST, KVYO, ARM, AVGO, MU, INTC, TXN, ADI, MCHP, ON, NXPI, QRVO, SWKS, TER, LRCX, AMAT, KLAC, ASML, TSM, GFS, WDC, STX, MP, ALB, SQM, LAC, LTHM, PLL, CHPT, BLNK, EVGO, BE, FCEL, RUN, NOVA, ENPH, SEDG, FSLR, CSIQ, JKS, DQ, PLD, AMT, CCI, EQIX, DLR, WY, PSA, EXR, CUBE, IRM, VICI, GLPI, STAG, EPR, AGNC, NLY, CMCSA, DIS, NFLX, PARA, WBD, FOXA, SIRI, FUBO, SPOT"
     
-    text = st.text_area("Ticker Watchlist", value=", ".join(default_tickers), height=180)
+    text = st.text_area("Ticker Watchlist", value=default_tickers, height=180)
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -91,7 +85,10 @@ def scan(t):
     try:
         price = get_price(t)
         if not price: return None, (t, ["no_price"])
-        if not (2 <= price <= 100): return None, (t, ["out_of_price_range"])
+        
+        # Use slider values for filtering
+        if not (price_range[0] <= price <= price_range[1]): 
+            return None, (t, ["out_of_range"])
         
         tk = yf.Ticker(t)
         if not tk.options: return None, (t, ["no_options"])
@@ -132,7 +129,6 @@ def scan(t):
                 cushion = (price - strike) / price * 100
             
             if juice <= 0: continue
-
             contracts = max(1, int(np.ceil(goal / juice)))
             if contracts * collateral > acct: continue
 
@@ -149,26 +145,13 @@ def scan(t):
     except Exception as e: return None, (t, [str(e)])
 
 # -------------------------------------------------
-# 5. UI LAYOUT
+# 5. UI & SCAN RUNNER
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-with st.expander("📖 HOW TO USE THIS SCANNER"):
-    st.markdown("""
-    ### Quick Setup
-    1. **Account Value**: Your available cash for trading.
-    2. **Weekly Goal**: The income you want to generate.
-    3. **Run Scan**: The tool finds the best ROI trades you can afford.
-
-    ### Safety Grades
-    * 🟢 **A (12%+ Cushion)**: High safety margin.
-    * 🟡 **B (7-12% Cushion)**: Balanced risk/reward.
-    * 🔴 **C (<7% Cushion)**: High yield, low safety.
-    """)
-
 if st.button("RUN SCAN ⚡", use_container_width=True):
     results, diags = [], {}
-    with st.spinner("Squeezing the juice..."):
+    with st.spinner(f"Scanning {len(tickers)} tickers between ${price_range[0]} and ${price_range[1]}..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     for r, (t, d) in out:
@@ -178,12 +161,12 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
     st.session_state.diags = diags
 
 # -------------------------------------------------
-# 6. RESULTS & CHARTING
+# 6. DISPLAY RESULTS
 # -------------------------------------------------
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if df.empty:
-        st.warning("No qualifying trades found. Adjust your filters or goals.")
+        st.warning("No trades found in this price range. Try expanding the slider.")
     else:
         df = df.sort_values("ROI %", ascending=False)
         sel = st.dataframe(df, use_container_width=True, hide_index=True,
@@ -193,7 +176,6 @@ if "results" in st.session_state:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
             c1, c2 = st.columns([2, 1])
-
             with c1:
                 components.html(f"""
                 <div id="tv" style="height:500px"></div>
@@ -206,7 +188,6 @@ if "results" in st.session_state:
                 }});
                 </script>
                 """, height=510)
-
             with c2:
                 g_char = r["Grade"][-1].lower()
                 st.markdown(f"""
