@@ -1,160 +1,183 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
-import urllib.request
+from datetime import datetime, time
 import numpy as np
-from scipy.stats import norm
-import plotly.graph_objects as go
+import pytz
+from concurrent.futures import ThreadPoolExecutor
 
-# --- 1. SETUP ---
-st.set_page_config(page_title="Income Bot Pro", page_icon="📈", layout="wide")
+# -------------------------------------------------
+# 1. APP SETUP & BRANDING
+# -------------------------------------------------
+st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
-@st.cache_data
-def get_sp500_tickers():
-    url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req) as response:
-        table = pd.read_html(response.read())
-    return table[0]['Symbol'].str.replace('.', '-', regex=False).tolist()
+# Static reliable icon for sidebar branding
+LOGO_URL = "https://img.icons8.com/fluency/150/family-save.png"
 
-PENNY_WATCHLIST = ['SOFI', 'IREN', 'AAL', 'F', 'T', 'BBAI', 'LUNR', 'ACHR', 'JOBY', 'PLUG']
-LEVERAGED_ETFS = ['TQQQ', 'SQQQ', 'SOXL', 'SOXS', 'UPRO', 'TNA', 'FNGU', 'LABU']
+st.markdown("""
+<style>
+    .main { background-color: #f8fafc; padding: 10px; }
+    .sentiment-bar { 
+        background: #000000; color: white; padding: 15px; 
+        border-radius: 15px; margin-bottom: 20px; 
+        display: flex; flex-direction: column; align-items: center; gap: 8px;
+    }
+    .status-tag { padding: 4px 12px; border-radius: 20px; font-size: 12px; text-transform: uppercase; }
+    .status-open { background-color: #16a34a; color: white; }
+    .status-closed { background-color: #dc2626; color: white; }
+    .card { 
+        border: 1px solid #e2e8f0; border-radius: 15px; background: white; 
+        padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
+    }
+    .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin:0; }
+    .cap-val { color: #ef4444; font-weight: 700; font-size: 18px; margin:0; }
+</style>
+""", unsafe_allow_html=True)
 
-if 'trade_history' not in st.session_state:
-    st.session_state.trade_history = []
-if 'last_results' not in st.session_state:
-    st.session_state.last_results = None
+# -------------------------------------------------
+# 2. MARKET DATA UTILITIES (Fixes NameError)
+# -------------------------------------------------
+def get_market_sentiment():
+    try:
+        data = yf.download(["^GSPC", "^VIX"], period="5d", interval="1d", progress=False)['Close']
+        if data.empty or len(data) < 2: return 0.0, 0.0, "#fff"
+        spy_now, spy_prev = data["^GSPC"].iloc[-1], data["^GSPC"].iloc[-2]
+        spy_ch = 0.0 if np.isnan(spy_now) or spy_prev == 0 else ((spy_now - spy_prev) / spy_prev) * 100
+        vix_val = data["^VIX"].iloc[-1] if not np.isnan(data["^VIX"].iloc[-1]) else 0.0
+        return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
+    except: return 0.0, 0.0, "#fff"
 
-# --- 2. SIDEBAR ---
+# CRITICAL FIX: Variables must exist before the UI tries to render them
+spy_ch, v_vix, s_c = get_market_sentiment()
+status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
+
+# -------------------------------------------------
+# 3. SIDEBAR: WEEKLY GOAL ENGINE
+# -------------------------------------------------
+TICKER_MAP = {
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITX", "FAS", "SPXL", "SQQQ", "UVXY"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
+    "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
+    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
+}
+
 with st.sidebar:
-    st.title("Institutional Settings")
-    page = st.radio("Navigation", ["🔍 Income Scanner", "📊 My Earnings Tracker"])
+    st.image(LOGO_URL, width=100)
+    st.subheader("🗓️ Weekly Account Engine")
+    total_account = st.number_input("Account Value ($)", value=10000, step=1000)
+    risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
+    
+    yield_map = {"Conservative": 0.0025, "Middle Road": 0.006, "Aggressive": 0.0125}
+    weekly_goal = total_account * yield_map[risk_mode]
+    st.metric("Weekly Income Goal", f"${weekly_goal:,.2f}")
+
     st.divider()
-    capital = st.number_input("Trading Capital ($)", value=4500, step=500)
-    strategy_type = st.selectbox("Strategy Type", ["Cash-Secured Put", "Covered Call"])
-    aggressive_mode = st.toggle("🔥 Aggressive Mode", value=False)
-    penny_mode = st.toggle("💰 Penny Stock Mode ($2-$20)", value=True)
-    leveraged_mode = st.toggle("🚀 Include 2x/3x ETFs", value=True)
-    target_weekly = st.number_input("Weekly Income Goal ($)", value=100, step=25)
-    max_days = st.slider("Max Days to Expiration", 7, 45, 14)
-
-# --- 3. MATH ---
-def calculate_pop(price, strike, days, iv, strategy):
-    if iv == 0 or days == 0: return 0.5
-    t = max(days, 1) / 365
-    d2 = (np.log(price / strike) + (-0.5 * iv**2) * t) / (iv * np.sqrt(t))
-    prob_itm = norm.cdf(d2)
-    return (1 - prob_itm) if strategy == "Cash-Secured Put" else prob_itm
-
-# ---------------------------------------------------------
-# PAGE 1: SCANNER
-# ---------------------------------------------------------
-if page == "🔍 Income Scanner":
-    st.title("🔍 Pro Scanner with Strike Visualization")
+    all_sectors = list(TICKER_MAP.keys())
+    selected_sectors = st.multiselect("Sectors", options=all_sectors, default=all_sectors)
     
-    ticker_list = PENNY_WATCHLIST if penny_mode else get_sp500_tickers()[:100]
-    if leveraged_mode:
-        ticker_list = list(set(ticker_list + LEVERAGED_ETFS))
+    st.divider()
+    min_oi = st.number_input("Min Open Interest", value=500)
+    max_price = st.slider("Max Price ($)", 10, 500, 100)
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
+
+# -------------------------------------------------
+# 4. SCANNER ENGINE (Fixes KeyError)
+# -------------------------------------------------
+def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
+    try:
+        stock = yf.Ticker(t)
+        info = stock.info
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
+        if not price or price > max_p: return None
+
+        for exp in stock.options[:2]:
+            dte = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
+            if 4 <= dte <= 12: 
+                chain = stock.option_chain(exp)
+                df = chain.calls if strategy_type != "Cash Secured Put" else chain.puts
+                df = df[df["openInterest"] >= oi_limit]
+                if df.empty: continue
+                
+                if strategy_type == "Deep ITM Covered Call":
+                    match_df = df[df["strike"] < price * 0.92]
+                    if match_df.empty: continue
+                    match = match_df.sort_values("strike", ascending=False).iloc[0]
+                elif strategy_type == "ATM (At-the-Money)":
+                    df["diff"] = abs(df["strike"] - price)
+                    match = df.sort_values("diff").iloc[0]
+                else: match = df.iloc[0]
+
+                prem = float(match["lastPrice"])
+                intrinsic = max(0, price - float(match["strike"])) if float(match["strike"]) < price else 0
+                juice = (prem - intrinsic)
+                basis = price - prem
+                
+                # Calculation of Contracts and Capital
+                contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
+                capital_req = (price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
+
+                # These dictionary keys MUST match display_cols exactly below
+                return {
+                    "Ticker": t, "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/basis)*100, 2),
+                    "Cushion %": round(((price - basis) / price) * 100, 2), 
+                    "Contracts": contracts, "Capital Req ($)": round(capital_req, 2),
+                    "OI": int(match["openInterest"])
+                }
+    except: return None
+
+# -------------------------------------------------
+# 5. UI & CHART (Fixes SyntaxError)
+# -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {v_vix:.2f}</div>
+</div>
+""", unsafe_allow_html=True)
+
+if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
+    univ = []
+    for s in selected_sectors: univ.extend(TICKER_MAP[s])
+    with ThreadPoolExecutor(max_workers=25) as ex:
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
+    st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
+
+if "results" in st.session_state and st.session_state.results:
+    df = pd.DataFrame(st.session_state.results)
     
-    if st.button("Run Global Scan 🔍"):
-        results = []
-        prog = st.progress(0); status = st.empty()
-        
-        for i, t in enumerate(ticker_list):
-            prog.progress((i + 1) / len(ticker_list))
-            status.text(f"Analyzing {t}...")
-            try:
-                stock = yf.Ticker(t); price = float(stock.fast_info['lastPrice'])
-                if penny_mode and (price < 2.0 or price > 20.0): continue
-                
-                exp = stock.options[0]; chain = stock.option_chain(exp)
-                days_to_exp = (datetime.strptime(exp, '%Y-%m-%d') - datetime.now()).days
-                
-                if strategy_type == "Cash-Secured Put":
-                    data = chain.puts; buffer = 0.99 if aggressive_mode else 0.95
-                    df_f = data[(data['strike'] * 100 <= capital) & (data['strike'] < price * buffer)]
-                    match = df_f.iloc[-1] if not df_f.empty else None
-                else:
-                    data = chain.calls; buffer = 1.01 if aggressive_mode else 1.05
-                    df_f = data[(data['strike'] * 100 <= capital) & (data['strike'] > price * buffer)]
-                    match = df_f.iloc[0] if not df_f.empty else None
+    # Fix: Matching exactly with Step 4 return keys
+    display_cols = ["Ticker", "Juice ($)", "ROI %", "Cushion %", "Contracts", "Capital Req ($)"]
+    
+    sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
-                if match is not None:
-                    bid_price = float(match['bid'])
-                    prem = bid_price * 100
-                    if prem > 5:
-                        qty = int(np.ceil(target_weekly / prem))
-                        total_cost = float(qty * match['strike'] * 100)
-                        if total_cost <= capital:
-                            pop = calculate_pop(price, float(match['strike']), days_to_exp, float(match.get('impliedVolatility', 0.4)), strategy_type)
-                            results.append({
-                                "Ticker": t, "Price": round(price, 2), "Strike": float(match['strike']),
-                                "Premium/Share": f"${bid_price:.2f}", "Win Prob": f"{pop*100:.1f}%",
-                                "Contracts": qty, "Total Pay": f"${prem * qty:.2f}", 
-                                "Weekly Goal %": f"{(prem * qty / capital)*100:.2f}%"
-                            })
-            except: continue
-        status.empty(); prog.empty()
-        st.session_state.last_results = results
-
-    if st.session_state.last_results:
-        df = pd.DataFrame(st.session_state.last_results).sort_values("Weekly Goal %", ascending=False)
-        st.success(f"Found {len(df)} setups!")
-        st.dataframe(df, use_container_width=True)
-        
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
         st.divider()
-        col_chart, col_log = st.columns([2, 1])
-        
-        with col_chart:
-            st.subheader("🕯️ Chart with Strike & Premium")
-            chart_ticker = st.selectbox("View Technicals:", df['Ticker'].tolist())
-            if chart_ticker:
-                # Get the specific data for the selected ticker
-                row = df[df['Ticker'] == chart_ticker].iloc[0]
-                strike_price = row['Strike']
-                premium_val = row['Premium/Share']
-                
-                c_data = yf.download(chart_ticker, period="3mo", interval="1d", auto_adjust=True)
-                close_prices = c_data['Close'].squeeze()
-                sma = close_prices.rolling(20).mean()
-                std = close_prices.rolling(20).std()
-                
-                fig = go.Figure()
-                # Candlesticks
-                fig.add_trace(go.Candlestick(x=c_data.index, open=c_data['Open'].squeeze(), high=c_data['High'].squeeze(), low=c_data['Low'].squeeze(), close=c_data['Close'].squeeze(), name='Price'))
-                
-                # Bollinger Bands
-                fig.add_trace(go.Scatter(x=c_data.index, y=sma + (2*std), name='Upper Band', line=dict(color='rgba(173,216,230,0.3)')))
-                fig.add_trace(go.Scatter(x=c_data.index, y=sma - (2*std), name='Lower Band', line=dict(color='rgba(173,216,230,0.3)'), fill='tonexty'))
-                
-                # --- NEW: STRIKE PRICE LINE ---
-                fig.add_hline(y=strike_price, line_dash="dash", line_color="green" if strategy_type == "Cash-Secured Put" else "red", 
-                              annotation_text=f"STRIKE: ${strike_price} (Premium: {premium_val})", annotation_position="bottom right")
-
-                fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-
-        with col_log:
-            st.subheader("📝 Tracker Log")
-            with st.form("log_form"):
-                pick = st.selectbox("Log to Snowball:", df['Ticker'].tolist())
-                if st.form_submit_button("Confirm & Save"):
-                    row_to_save = df[df['Ticker'] == pick].iloc[0]
-                    clean_income = float(row_to_save['Total Pay'].replace('$', ''))
-                    st.session_state.trade_history.append({"Date": datetime.now().strftime("%Y-%m-%d"), "Ticker": row_to_save['Ticker'], "Income": clean_income})
-                    st.toast(f"Logged ${clean_income}!")
-
-# ---------------------------------------------------------
-# PAGE 2: TRACKER
-# ---------------------------------------------------------
-elif page == "📊 My Earnings Tracker":
-    st.title("📊 The Wealth Snowball")
-    if st.session_state.trade_history:
-        df_h = pd.DataFrame(st.session_state.trade_history)
-        total = df_h['Income'].sum()
-        st.metric("Total Income Collected", f"${total:.2f}")
-        st.line_chart(df_h.set_index('Date')['Income'].cumsum())
-        st.table(df_h)
-    else:
-        st.warning("No trades logged yet!")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            # Fix: Using triple quotes to safely embed JS without unterminated string errors
+            components.html(f"""
+                <div id="tv-chart" style="height:400px;"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                    "autosize": true, "symbol": "{row['Ticker']}", 
+                    "interval": "D", "theme": "light", "style": "1", "container_id": "tv-chart"
+                }});
+                </script>
+            """, height=420)
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+                <h3>{row['Ticker']} Details</h3>
+                <p class="juice-val">${row['Juice ($)']} Juice</p>
+                <p class="cap-val">Required: ${row['Capital Req ($)']:,}</p>
+                <hr>
+                <b>Weekly Contracts:</b> {row['Contracts']}<br>
+                <b>Safety Cushion:</b> {row['Cushion %']}%<br>
+                <b>Liquidity:</b> {row['OI']} OI
+            </div>
+            """, unsafe_allow_html=True)
