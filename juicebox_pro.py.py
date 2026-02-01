@@ -18,22 +18,21 @@ st.markdown("""
     .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);}
     .juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
     .stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
+    .disclaimer {font-size: 11px; color: #9ca3af; line-height: 1.4; margin-top: 20px;}
+    .guide-box {background: #f8fafc; padding: 15px; border-radius: 12px; border-left: 5px solid #16a34a; margin-bottom: 20px;}
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
 # 2. HELPERS
 # -------------------------------------------------
-@st.cache_data(ttl=3600) # Fundamentals cached longer (1 hour)
+@st.cache_data(ttl=3600)
 def is_healthy(t):
     try:
         tk = yf.Ticker(t)
         info = tk.info
-        # Check Net Income or EBITDA to ensure company isn't bleeding cash
-        net_income = info.get("netIncomeToCommon", 0)
-        return net_income > 0
-    except:
-        return True # Default to True if data missing to avoid over-filtering
+        return info.get("netIncomeToCommon", 0) > 0
+    except: return True
 
 @st.cache_data(ttl=300)
 def get_price(t):
@@ -74,9 +73,7 @@ with st.sidebar:
         "Cash Secured Put"
     ])
     
-    # NEW FUNDAMENTAL TOGGLE
-    filter_fundamentals = st.toggle("Positive Fundamentals Only", value=False, help="Filters for profitable companies (Net Income > 0)")
-    
+    filter_fundamentals = st.toggle("Positive Fundamentals Only", value=False)
     cushion_req = st.slider("Min ITM Cushion %", 0, 30, 10) if "Deep ITM" in strategy else 0
 
     st.divider()
@@ -89,10 +86,7 @@ with st.sidebar:
 # -------------------------------------------------
 def scan(t):
     try:
-        # Check Fundamentals if toggle is ON
-        if filter_fundamentals:
-            if not is_healthy(t): return None, (t, ["bad_fundamentals"])
-
+        if filter_fundamentals and not is_healthy(t): return None, (t, ["bad_fundamentals"])
         price = get_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None, (t, ["out_of_range"])
         
@@ -118,7 +112,7 @@ def scan(t):
             elif strategy == "ATM Covered Call":
                 df["d"] = abs(df["strike"] - price)
                 pick = df.sort_values("d").iloc[0]
-            else: # Cash Secured Put
+            else: # CSP
                 df = df[df["strike"] <= price]
                 if df.empty: continue
                 df["d"] = abs(df["strike"] - price)
@@ -127,7 +121,6 @@ def scan(t):
             strike, prem = float(pick["strike"]), mid_price(pick)
             if prem <= 0: continue
 
-            # Math Core
             if is_put:
                 juice, collateral = prem * 100, strike * 100
                 yield_pct = (juice / collateral) * 100
@@ -161,9 +154,21 @@ def scan(t):
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
+# --- HOW TO USE SECTION ---
+with st.expander("📖 How to Use JuiceBox Pro", expanded=False):
+    st.markdown("""
+    <div class="guide-box">
+    1. <b>Configure:</b> Set your Account Value and Weekly Goal in the sidebar.<br>
+    2. <b>Select Strategy:</b> Choose <i>Standard OTM</i> for growth + income, or <i>Deep ITM</i> for maximum safety.<br>
+    3. <b>Run Scan:</b> Click the green button to pull real-time options data.<br>
+    4. <b>Analyze:</b> Click a row in the table to view the TradingView chart and "Juice" breakdown.<br>
+    5. <b>Execute:</b> Use the Strike and Expiration data to place your trade in your preferred brokerage.
+    </div>
+    """, unsafe_allow_html=True)
+
 if st.button("RUN SCAN ⚡", use_container_width=True):
     results = []
-    with st.spinner(f"Squeezing {len(tickers)} tickers..."):
+    with st.spinner("Squeezing tickers..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     for r, (t, d) in out:
@@ -171,16 +176,13 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
     st.session_state.results = results
 
 # -------------------------------------------------
-# 6. DISPLAY
+# 6. DISPLAY & LEGAL
 # -------------------------------------------------
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
-    if df.empty:
-        st.warning("No matches found. Try disabling the fundamental filter or expanding your price range.")
-    else:
+    if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
         sel = st.dataframe(df, use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
-        
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
@@ -190,23 +192,15 @@ if "results" in st.session_state:
             with c2:
                 g_char = r["Grade"][-1].lower()
                 main_metric = f"{r['Total Return %']}%" if "Covered Call" in strategy else f"{r['Yield %']}%"
-                label = "Potential Total Return" if "Covered Call" in strategy else "Yield (Premium)"
-                
-                st.markdown(f"""
-                <div class="card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h2 style="margin:0;">{r['Ticker']}</h2>
-                        <span class="grade-{g_char}">{r['Grade']}</span>
-                    </div>
-                    <p style="margin-bottom:0; font-size:14px; color:#6b7280;">{label}</p>
-                    <div class="juice-val">{main_metric}</div>
-                    <hr>
-                    <div style="display:flex; justify-content:space-between;"><span><b>Yield:</b></span><span>{r['Yield %']}%</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span><b>Upside:</b></span><span>{r['Upside %']}%</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span><b>Cushion:</b></span><span>{r['Cushion %']}%</span></div>
-                    <hr>
-                    <b>Strike:</b> ${r['Strike']} | <b>Exp:</b> {r['Expiration']}<br>
-                    <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']:,.2f}<br>
-                    <b>Collateral Required:</b> ${r['Collateral']:,.0f}
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><h2 style="margin:0;">{r['Ticker']}</h2><span class="grade-{g_char}">{r['Grade']}</span></div><p style="margin-bottom:0; font-size:14px; color:#6b7280;">Potential Total Return</p><div class="juice-val">{main_metric}</div><hr><div style="display:flex; justify-content:space-between;"><span><b>Yield:</b></span><span>{r['Yield %']}%</span></div><div style="display:flex; justify-content:space-between;"><span><b>Upside:</b></span><span>{r['Upside %']}%</span></div><div style="display:flex; justify-content:space-between;"><span><b>Cushion:</b></span><span>{r['Cushion %']}%</span></div><hr><b>Strike:</b> ${r['Strike']} | <b>Exp:</b> {r['Expiration']}<br><b>Total Juice:</b> ${r['Total Juice']:,.2f}<br><b>Collateral:</b> ${r['Collateral']:,.0f}</div>""", unsafe_allow_html=True)
+
+# --- LEGAL DISCLAIMER ---
+st.markdown("""
+<div class="disclaimer">
+<b>LEGAL DISCLAIMER:</b> JuiceBox Pro is a data processing tool for informational purposes only. It does not constitute financial, investment, or legal advice. 
+All calculations are estimates based on delayed or real-time market data and are subject to change. Trading options involves significant risk, 
+including the potential loss of principal. The creator of this tool is not a registered investment advisor and assumes no liability for any 
+financial losses or damages resulting from the use of this software. By using this tool, you agree to assume all responsibility for your 
+own investment decisions. Past performance is not indicative of future results.
+</div>
+""", unsafe_allow_html=True)
