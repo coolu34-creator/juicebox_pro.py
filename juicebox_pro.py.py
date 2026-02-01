@@ -81,12 +81,11 @@ with st.sidebar:
     st.header("🧃 Configuration")
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     
-    # --- PERCENTAGE & MONEY GOAL ---
+    # --- DUAL GOAL: PERCENTAGE & MONEY ---
     c1, c2 = st.columns(2)
     with c1:
         goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1)
     with c2:
-        # Auto-calculate dollar goal based on percentage
         calc_goal = acct * (goal_pct / 100)
         goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, calc_goal, step=10.0)
     
@@ -96,13 +95,13 @@ with st.sidebar:
     
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
-        put_mode = st.radio("Put Strategy Mode", ["OTM (Safe)", "ITM (Extrinsic Focus)"], horizontal=True)
+        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True)
     
     cushion_val = st.slider("Min Cushion %", 0, 50, 10) if strategy != "ATM Covered Call" else 0
-    st.info(f"💡 **OI 500+ Active** | Targeting ${goal_amt:,.2f} ({goal_pct}%)")
+    st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f}")
 
     st.divider()
-    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
+    text = st.text_area("Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -130,9 +129,9 @@ def scan(t):
             elif strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
             elif strategy == "Cash Secured Put":
-                if "OTM" in put_mode:
+                if put_mode == "OTM":
                     df = df[df["strike"] <= price * (1 - cushion_val / 100)]
-                else:
+                else: # ITM Put Mode
                     df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
             for _, row in df.iterrows():
@@ -140,27 +139,26 @@ def scan(t):
                 open_int = row.get("openInterest", 0)
                 if open_int < 500 or total_prem <= 0: continue
 
+                # Extrinsic Math (Checking for time value)
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
                 if intrinsic > 0 and extrinsic <= 0.05: continue
 
+                # ITM Logic: Juice is Extrinsic only
                 juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
 
-                upside = ((strike - price) / price * 100) if not is_put and strike > price else 0
-                total_ret = ((juice_con / coll_con) * 100) + upside
+                total_ret = (juice_con / coll_con) * 100
                 
-                # USE DYNAMIC GOAL AMOUNT
                 needed = max(1, int(np.ceil(goal_amt / (juice_con if juice_con > 0 else 1))))
                 if (needed * coll_con) > acct: continue
 
                 res = {
                     "Ticker": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
-                    "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "DTE": exp_dte,
+                    "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "OI": int(open_int),
                     "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
-                    "Total Prem": round(total_prem * 100, 2), "OI": int(open_int),
-                    "Juice/Con": round(juice_con, 2), "Total Return %": round(total_ret, 2), 
+                    "Total Prem": round(total_prem * 100, 2), "Total Return %": round(total_ret, 2), 
                     "Contracts": needed, "Total Juice": round(juice_con * needed, 2), 
                     "Collateral": round(needed * coll_con, 0)
                 }
@@ -179,3 +177,37 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
     with st.spinner(f"Scanning for {goal_pct}% yield opportunities..."):
+        # Fixed IndentationError: Code block must follow spinner
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            out = list(ex.map(scan, tickers))
+        st.session_state.results = [r for r in out if r is not None]
+
+if "results" in st.session_state:
+    df = pd.DataFrame(st.session_state.results)
+    if not df.empty:
+        df = df.sort_values("Total Return %", ascending=False)
+        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
+        
+        if sel.selection.rows:
+            r = df.iloc[sel.selection.rows[0]]
+            st.divider()
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                tv_html = f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true,"symbol": "{r['Ticker']}","interval": "D","theme": "light","container_id": "tv"}});</script>"""
+                components.html(tv_html, height=510)
+            with c2:
+                g = r["Grade"][-1].lower()
+                card_html = f"""<div class="card">
+                <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
+                <div class="juice-val">{r['Total Return %']}%</div>
+                <hr>
+                <b>Goal Progress:</b> {round((r['Total Juice']/goal_amt)*100, 1)}% of goal<br>
+                <b>Breakdown:</b> Extrinsic: ${r['Extrinsic']} | Intrinsic: ${r['Intrinsic']}<br>
+                <hr>
+                <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']}<br>
+                <b>Collateral:</b> ${r['Collateral']:,.0f}
+                </div>"""
+                st.markdown(card_html, unsafe_allow_html=True)
+
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Premium-focused scanning active.</div>""", unsafe_allow_html=True)
