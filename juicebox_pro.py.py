@@ -12,6 +12,9 @@ from concurrent.futures import ThreadPoolExecutor
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
+# High-quality static icon to prevent broken images
+LOGO_URL = "https://img.icons8.com/fluency/150/family-save.png"
+
 st.markdown("""
 <style>
     .main { background-color: #f8fafc; padding: 10px; }
@@ -27,8 +30,8 @@ st.markdown("""
         border: 1px solid #e2e8f0; border-radius: 15px; background: white; 
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
-    .juice-val { color: #16a34a; font-weight: 800; font-size: 24px; margin:0; }
-    .cushion-val { color: #2563eb; font-weight: 700; font-size: 18px; margin:0; }
+    .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin:0; }
+    .cap-val { color: #ef4444; font-weight: 700; font-size: 18px; margin:0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -45,20 +48,24 @@ def get_market_sentiment():
         return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# Fix: Initialize variables early to prevent NameError
+# CRITICAL FIX: Variables defined BEFORE the UI
 spy_ch, v_vix, s_c = get_market_sentiment()
 status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
 
 # -------------------------------------------------
-# 3. SIDEBAR: ACCOUNT & CUSTOM IMAGE
+# 3. SIDEBAR: WEEKLY GOAL ENGINE
 # -------------------------------------------------
+TICKER_MAP = {
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITX", "FAS", "SPXL", "SQQQ", "UVXY"],
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
+    "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
+    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
+    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
+}
+
 with st.sidebar:
-    # IMPORTANT: Save your cartoon as 'couple.png' in your GitHub folder for this to work
-    try:
-        st.image("couple.png", caption="Generational Wealth", use_container_width=True)
-    except:
-        st.info("Place 'couple.png' in your folder to see your cartoon!")
-    
+    st.image(LOGO_URL, width=100)
     st.subheader("🗓️ Weekly Account Engine")
     total_account = st.number_input("Account Value ($)", value=10000, step=1000)
     risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
@@ -68,17 +75,22 @@ with st.sidebar:
     st.metric("Weekly Income Goal", f"${weekly_goal:,.2f}")
 
     st.divider()
-    max_price = st.slider("Max Stock Price ($)", 10, 500, 100)
+    all_sectors = list(TICKER_MAP.keys())
+    selected_sectors = st.multiselect("Sectors", options=all_sectors, default=all_sectors)
+    
+    st.divider()
     min_oi = st.number_input("Min Open Interest", value=500)
+    max_price = st.slider("Max Price ($)", 10, 500, 100)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER ENGINE (Cushion Price Added)
+# 4. SCANNER ENGINE (Fixes KeyError)
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
     try:
         stock = yf.Ticker(t)
-        price = stock.fast_info['last_price']
+        info = stock.info
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not price or price > max_p: return None
 
         for exp in stock.options[:2]:
@@ -101,12 +113,12 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
                 prem = float(match["lastPrice"])
                 intrinsic = max(0, price - float(match["strike"])) if float(match["strike"]) < price else 0
                 juice = (prem - intrinsic)
-                cushion_price = price - prem # YOUR BREAK-EVEN basis
+                cushion_price = price - prem
                 
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
                 capital_req = (price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
 
-                # Keys must match display_cols exactly
+                # KEYS MUST MATCH display_cols EXACTLY
                 return {
                     "Ticker": t, "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/cushion_price)*100, 2),
                     "Cushion Price ($)": round(cushion_price, 2), "Cushion %": round(((price - cushion_price) / price) * 100, 2),
@@ -115,7 +127,7 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY & CHART
+# 5. UI DISPLAY & CHART (Fixes SyntaxError)
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -125,15 +137,18 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
-    univ = ["SPY", "QQQ", "IWM", "AMD", "NVDA", "AAPL", "TSLA", "PLTR", "SOFI", "AFRM", "MARA", "RIOT", "F", "BAC"]
+    univ = []
+    for s in selected_sectors: univ.extend(TICKER_MAP[s])
     with ThreadPoolExecutor(max_workers=25) as ex:
         results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    # Fix: Defined display_cols to match scanner keys
-    display_cols = ["Ticker", "Juice ($)", "Cushion Price ($)", "Cushion %", "Contracts", "Capital Req ($)"]
+    
+    # Strictly aligned column list
+    display_cols = ["Ticker", "Juice ($)", "ROI %", "Cushion %", "Contracts", "Capital Req ($)"]
+    
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
@@ -141,7 +156,7 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            # Fix: Triple quotes for JS safety
+            # Triple quotes fix unterminated f-string literal
             components.html(f"""
                 <div id="tv-chart" style="height:400px;"></div>
                 <script src="https://s3.tradingview.com/tv.js"></script>
@@ -157,10 +172,10 @@ if "results" in st.session_state and st.session_state.results:
             <div class="card">
                 <h3>{row['Ticker']} Safety Check</h3>
                 <p class="juice-val">${row['Juice ($)']} Juice</p>
-                <p class="cushion-val">Break-even: ${row['Cushion Price ($)']}</p>
+                <p style="color:#2563eb; font-weight:700;">Break-even: ${row['Cushion Price ($)']}</p>
                 <hr>
                 <b>Weekly Contracts:</b> {row['Contracts']}<br>
-                <b>Safety Cushion:</b> {row['Cushion %']}%<br>
-                <b>Liquidity:</b> {row['OI']} OI
+                <b>Budget Required:</b> ${row['Capital Req ($)']:,}<br>
+                <b>Safety Cushion:</b> {row['Cushion %']}%
             </div>
             """, unsafe_allow_html=True)
