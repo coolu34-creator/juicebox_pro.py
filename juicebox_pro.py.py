@@ -12,13 +12,13 @@ st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
 st.markdown("""
 <style>
-.grade-a { background:#22c55e;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
-.grade-b { background:#eab308;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
-.grade-c { background:#ef4444;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
-.card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);}
-.juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
-.muted {color:#6b7280;font-size:12px;margin-top:15px;}
-.stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
+    .grade-a { background:#22c55e;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
+    .grade-b { background:#eab308;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
+    .grade-c { background:#ef4444;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
+    .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);}
+    .juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
+    .muted {color:#6b7280;font-size:12px;margin-top:15px;}
+    .stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -30,7 +30,7 @@ def get_price(t):
     try:
         tk = yf.Ticker(t)
         fi = getattr(tk, "fast_info", None)
-        if fi and fi.get("last_price"): return float(fi["last_price"])
+        if fi and "last_price" in fi: return float(fi["last_price"])
     except: pass
     try:
         hist = yf.Ticker(t).history(period="1d")
@@ -56,18 +56,14 @@ with st.sidebar:
     
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
-    
-    # PRICE RANGE SLIDER
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
 
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
     cushion_req = st.slider("Min ITM Cushion %", 0, 30, 10) if "Deep ITM" in strategy else 0
-    show_diag = st.checkbox("Show Error Logs", value=False)
-
+    
     st.divider()
     
-    # YOUR 200 TICKER MASTER LIST
-    default_ticks = "SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, SNAP, PFE, NIO, HOOD, RKT, BAC, KVUE, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, BITO, C, GM, DAL, UBER, MARA, RIOT, COIN, DKNG, LCID, PENT, AI, GME, AMC, BB, PATH, U, AFrm, COVA, SQ, SHOP, NU, RIVN, GRAB, SE, CCL, NCLH, RCL, SAVE, JBLU, UAL, LUV, MAR, HLT, MGM, WYNN, PENN, TLRY, CGC, CRON, ACB, MSOS, GRWG, CAN, HUT, HIVE, CLSK, BTBT, WULF, SDIG, IREN, CIFR, GREE, CORZ, BTDR, BITF, GCT, PDD, BABA, JD, LI, XPEV, BIDU, FUTU, TME, VIPS, IQ, EDU, TAL, GOTU, YALA, EM, EH, ATAT, ZK, KGEA, S, NET, CRWD, OKTA, ZS, DDOG, SNOW, MDB, TEAM, ASAN, MOND, SMAR, ESTC, SPLK, NTNX, BOX, DBX, DOCU, ZM, WORK, PINS, ETSY, EBAY, DASH, ROKU, W, CHWY, CVNA, OSTK, BYND, EXPE, BKNG, ABNB, LYFT, GRUB, CART, INST, KVYO, ARM, AVGO, MU, INTC, TXN, ADI, MCHP, ON, NXPI, QRVO, SWKS, TER, LRCX, AMAT, KLAC, ASML, TSM, GFS, WDC, STX, MP, ALB, SQM, LAC, LTHM, PLL, CHPT, BLNK, EVGO, BE, FCEL, RUN, NOVA, ENPH, SEDG, FSLR, CSIQ, JKS, DQ, PLD, AMT, CCI, EQIX, DLR, WY, PSA, EXR, CUBE, IRM, VICI, GLPI, STAG, EPR, AGNC, NLY, CMCSA, DIS, NFLX, PARA, WBD, FOXA, SIRI, FUBO, SPOT, BOIL, UNG"
+    default_ticks = "SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, SNAP, PFE, NIO, HOOD, RKT, BAC, KVUE, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, BITO, C, GM, DAL, UBER, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, BB, PATH, U, SQ, SHOP, NU, RIVN, GRAB, SE, CCL, NCLH, RCL, SAVE, JBLU, UAL, LUV, MAR, HLT, MGM, WYNN, PENN, TLRY, CGC, CRON, ACB, MSOS, CAN, HUT, HIVE, CLSK, BTBT, WULF, SDIG, IREN, CIFR, BITF, GCT, PDD, BABA, JD, LI, XPEV, BIDU, FUTU, TME, VIPS, IQ, EDU, TAL, GOTU, NET, CRWD, OKTA, ZS, DDOG, SNOW, MDB, TEAM, ASAN, MOND, SMAR, ESTC, SPLK, NTNX, BOX, DBX, DOCU, ZM, PINS, ETSY, EBAY, DASH, ROKU, W, CHWY, CVNA, BYND, EXPE, BKNG, ABNB, LYFT, ARM, AVGO, MU, INTC, TXN, ADI, MCHP, ON, NXPI, QRVO, SWKS, TER, LRCX, AMAT, KLAC, ASML, TSM, GFS, WDC, STX, MP, ALB, SQM, LAC, CHPT, BLNK, EVGO, BE, FCEL, RUN, NOVA, ENPH, SEDG, FSLR, CSIQ, JKS, DQ, PLD, AMT, CCI, EQIX, DLR, WY, PSA, EXR, CUBE, IRM, VICI, GLPI, STAG, EPR, AGNC, NLY, CMCSA, DIS, NFLX, PARA, WBD, FOXA, SIRI, FUBO, SPOT, BOIL, UNG"
     
     text = st.text_area("Ticker Watchlist", value=default_ticks, height=180)
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
@@ -84,6 +80,7 @@ def scan(t):
         if not tk.options: return None, (t, ["no_options"])
 
         best = None
+        # Checking nearest 2 expirations
         for exp in tk.options[:2]:
             chain = tk.option_chain(exp)
             is_put = strategy == "Cash Secured Put"
@@ -111,6 +108,7 @@ def scan(t):
                 juice, collateral = prem * 100, strike * 100
                 cushion = (price - strike) / price * 100
             else:
+                # Extrinsic value is the "juice" for Covered Calls
                 extrinsic = max(prem - max(price - strike, 0), 0)
                 juice, collateral = extrinsic * 100, price * 100
                 cushion = (price - strike) / price * 100
@@ -120,7 +118,13 @@ def scan(t):
             if contracts * collateral > acct: continue
 
             roi = (juice / collateral) * 100
-            row = {"Ticker": t, "Grade": grade(cushion), "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2), "Contracts": contracts, "Total Juice": round(juice * contracts, 2), "Cushion %": round(cushion, 2), "ROI %": round(roi, 2), "Collateral": round(contracts * collateral, 0)}
+            row = {
+                "Ticker": t, "Grade": grade(cushion), "Price": round(price, 2), 
+                "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2), 
+                "Contracts": contracts, "Total Juice": round(juice * contracts, 2), 
+                "Cushion %": round(cushion, 2), "ROI %": round(roi, 2), 
+                "Collateral": round(contracts * collateral, 0)
+            }
             if not best or roi > best["ROI %"]: best = row
         return (best, (t, [])) if best else (None, (t, ["no_match"]))
     except Exception as e: return None, (t, [str(e)])
@@ -146,16 +150,53 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 # -------------------------------------------------
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
-    if df.empty: st.warning("No matches. Try expanding your price range or lowering your goal.")
+    if df.empty: 
+        st.warning("No matches found. Try expanding your price range or lowering your goal.")
     else:
         df = df.sort_values("ROI %", ascending=False)
-        sel = st.dataframe(df, use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
+        # Display Dataframe
+        sel = st.dataframe(
+            df, 
+            use_container_width=True, 
+            hide_index=True, 
+            selection_mode="single-row", 
+            on_select="rerun"
+        )
+        
+        # Detail View on Selection
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv", "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]}});</script>""", height=510)
+                components.html(f"""
+                    <div id="tv" style="height:500px"></div>
+                    <script src="https://s3.tradingview.com/tv.js"></script>
+                    <script>
+                    new TradingView.widget({{
+                        "autosize": true, "symbol": "{r['Ticker']}", "interval": "D", 
+                        "theme": "light", "style": "1", "container_id": "tv", 
+                        "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]
+                    }});
+                    </script>
+                """, height=510)
             with c2:
                 g_char = r["Grade"][-1].lower()
-                st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><h2 style="margin:0;">{r['Ticker']}</h2><span class="grade-{g_char}">{r['Grade']}</span></div><p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Weekly Juice</p><div class="juice-val">${r['Total Juice']:,.2f}</div><hr><b>Price:</b> ${r['Price']}<br><b>Strike:</b> ${r['Strike']}<br><b>Exp:</b> {r['Expiration']}<br><b>Contracts:</b> {r['Contracts']}<br><b>Cushion:</b> {r['Cushion %']}%<br><b>ROI:</b> {r['ROI %']}%<br><b>Collateral:</b> ${r['Collateral']:,.0f}</div>""", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2 style="margin:0;">{r['Ticker']}</h2>
+                        <span class="grade-{g_char}">{r['Grade']}</span>
+                    </div>
+                    <p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Weekly Juice</p>
+                    <div class="juice-val">${r['Total Juice']:,.2f}</div>
+                    <hr>
+                    <b>Price:</b> ${r['Price']}<br>
+                    <b>Strike:</b> ${r['Strike']}<br>
+                    <b>Exp:</b> {r['Expiration']}<br>
+                    <b>Contracts:</b> {r['Contracts']}<br>
+                    <b>Cushion:</b> {r['Cushion %']}%<br>
+                    <b>ROI:</b> {r['ROI %']}%<br>
+                    <b>Collateral:</b> ${r['Collateral']:,.0f}
+                </div>
+                """, unsafe_allow_html=True)
