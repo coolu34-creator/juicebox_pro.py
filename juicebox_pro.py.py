@@ -73,8 +73,19 @@ with st.sidebar:
     show_diag = st.checkbox("Show Error Logs", value=False)
 
     st.divider()
-    default_tickers = ["AAPL","MSFT","AMZN","GOOGL","META","NVDA","AMD","TSLA","PLTR","SPY","QQQ","IWM","SOXL","TQQQ","BITO"]
-    text = st.text_area("Ticker Watchlist", value=", ".join(default_tickers), height=150)
+    
+    # --- EXPANDED TICKER LIST ($2 - $100 RANGE) ---
+    # Includes: Mid-cap tech, Retailers, Pharma, Energy, and popular Option ETFs
+    default_tickers = [
+        # $2 - $10 (High Volatility/Speculative)
+        "SOFI", "PLUG", "LUMN", "OPEN", "BBAI", "CLOV", "MVIS", "MPW",
+        # $10 - $50 (Mid-Caps & High-Volume)
+        "PLTR", "AAL", "F", "SNAP", "PFE", "NIO", "HOOD", "RKT", "BAC", "KVUE", "T", "VZ",
+        # $50 - $100 (Established Blue Chips & ETFs)
+        "AAPL", "AMD", "TSLA", "PYPL", "KO", "O", "TQQQ", "SOXL", "BITO", "C", "GM", "DAL", "UBER", "MARA"
+    ]
+    
+    text = st.text_area("Ticker Watchlist", value=", ".join(default_tickers), height=180)
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -85,10 +96,15 @@ def scan(t):
         price = get_price(t)
         if not price: return None, (t, ["no_price"])
         
+        # We only want stocks between $2 and $100
+        if not (2 <= price <= 100):
+            return None, (t, ["out_of_price_range"])
+        
         tk = yf.Ticker(t)
         if not tk.options: return None, (t, ["no_options"])
 
         best = None
+        # Check the 2 closest expiration cycles
         for exp in tk.options[:2]:
             chain = tk.option_chain(exp)
             is_put = strategy == "Cash Secured Put"
@@ -103,7 +119,7 @@ def scan(t):
             elif strategy == "ATM Covered Call":
                 df["d"] = abs(df["strike"] - price)
                 pick = df.sort_values("d").iloc[0]
-            else:
+            else: # CSP
                 df = df[df["strike"] <= price]
                 if df.empty: continue
                 df["d"] = abs(df["strike"] - price)
@@ -121,7 +137,7 @@ def scan(t):
                 juice = extrinsic * 100
                 collateral = price * 100
             
-            cushion = (price - strike) / price * 100
+            cushion = ((price - strike) / price * 100) if not is_put else ((strike - price) / price * 100)
             if juice <= 0: continue
 
             contracts = max(1, int(np.ceil(goal / juice)))
@@ -129,7 +145,7 @@ def scan(t):
 
             roi = (juice / collateral) * 100
             row = {
-                "Ticker": t, "Grade": grade(cushion), "Price": round(price, 2),
+                "Ticker": t, "Grade": grade(abs(cushion)), "Price": round(price, 2),
                 "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2),
                 "Contracts": contracts, "Total Juice": round(juice * contracts, 2),
                 "Cushion %": round(cushion, 2), "ROI %": round(roi, 2),
@@ -147,17 +163,17 @@ st.title("🧃 JuiceBox Pro")
 with st.expander("📖 HOW TO USE THIS SCANNER", expanded=False):
     st.markdown("""
     ### 1. Set Your Goals
-    Enter your **Account Value** and **Weekly Goal** in the sidebar. The tool calculates how many contracts are required to hit your income target without over-leveraging.
+    Enter your **Account Value** and **Weekly Goal** in the sidebar. 
     
-    ### 2. Strategies
-    * **Deep ITM Call:** Defensive. Sell far below price; profit is the 'extrinsic' value.
-    * **ATM Call:** Aggressive. Higher yield, less protection.
-    * **Cash Secured Put:** Paid to wait to buy a stock at a discount.
+    ### 2. Strategy Guide
+    * **Deep ITM Call:** Defensive. You sell a strike far below the current price to "lock in" safety.
+    * **ATM Call:** Balanced. Selling at the current price for higher premium but less protection.
+    * **Cash Secured Put:** Bullish/Neutral. Getting paid to wait to buy a stock at a discount.
     
     ### 3. Safety Grades
-    * 🟢 **A (12%+ Cushion):** Very Conservative.
-    * 🟡 **B (7-12% Cushion):** Balanced.
-    * 🔴 **C (<7% Cushion):** Aggressive.
+    * 🟢 **A (12%+ Cushion):** Low risk of the stock dropping past your strike.
+    * 🟡 **B (7-12% Cushion):** Moderate risk.
+    * 🔴 **C (<7% Cushion):** High risk; stock doesn't have to move much to hit your strike.
     """)
 
 if st.button("RUN SCAN ⚡", use_container_width=True):
@@ -174,53 +190,4 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 # -------------------------------------------------
 # 6. RESULTS & CHARTING
 # -------------------------------------------------
-if "results" in st.session_state:
-    df = pd.DataFrame(st.session_state.results)
-    if df.empty:
-        st.warning("No qualifying trades found for this budget/strategy.")
-    else:
-        sel = st.dataframe(df, use_container_width=True, hide_index=True,
-                            selection_mode="single-row", on_select="rerun")
-
-        if sel.selection.rows:
-            r = df.iloc[sel.selection.rows[0]]
-            st.divider()
-            c1, c2 = st.columns([2, 1])
-
-            with c1:
-                components.html(f"""
-                <div id="tv" style="height:500px"></div>
-                <script src="https://s3.tradingview.com/tv.js"></script>
-                <script>
-                new TradingView.widget({{
-                  "autosize": true, "symbol": "{r['Ticker']}", "interval": "D",
-                  "theme": "light", "style": "1", "container_id": "tv",
-                  "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]
-                }});
-                </script>
-                """, height=510)
-
-            with c2:
-                g_char = r["Grade"][-1].lower()
-                st.markdown(f"""
-                <div class="card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h2 style="margin:0;">{r['Ticker']}</h2>
-                        <span class="grade-{g_char}">{r['Grade']}</span>
-                    </div>
-                    <p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Profit</p>
-                    <div class="juice-val">${r['Total Juice']:,.2f}</div>
-                    <hr>
-                    <b>Target Strike:</b> ${r['Strike']}<br>
-                    <b>Expiration:</b> {r['Expiration']}<br>
-                    <b>Contracts:</b> {r['Contracts']}<br>
-                    <b>Cushion:</b> {r['Cushion %']}%<br>
-                    <b>ROI:</b> {r['ROI %']}%<br>
-                    <b>Collateral:</b> ${r['Collateral']:,.0f}
-                    <p class="muted">Note: Mid-price used for juice. Please verify bid/ask spread before trading.</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-    if show_diag:
-        with st.expander("System Logs"):
-            st.write(st.session_state.diags)
+if "
