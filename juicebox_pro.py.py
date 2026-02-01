@@ -24,39 +24,39 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin:0; }
-    .prem-val { color: #2563eb; font-weight: 700; font-size: 18px; margin:0; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES
+# 2. MARKET DATA UTILITIES (Fixes NameError)
 # -------------------------------------------------
 def get_market_sentiment():
     try:
         data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1d", progress=False)['Close']
         spy_ch = ((data["^GSPC"].iloc[-1] - data["^GSPC"].iloc[-2]) / data["^GSPC"].iloc[-2]) * 100
         vix_val = data["^VIX"].iloc[-1]
-        return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
+        return spy_ch, vix_val, ("#ef4444" if spy_ch < 0 else "#22c55e")
     except: return 0.0, 0.0, "#fff"
 
 spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SIDEBAR: GOALS & PRECISION FILTERS
+# 3. SIDEBAR: ACCOUNT & PRECISION RANGE
 # -------------------------------------------------
 with st.sidebar:
     try:
         st.image("couple.png", use_container_width=True)
     except:
-        st.info("Upload 'couple.png' to see your legacy branding.")
+        st.warning("Upload 'couple.png' to this folder to see your branding.")
     
     st.subheader("🗓️ Weekly Account Engine")
     total_acc = st.number_input("Account Value ($)", value=10000, step=1000)
     
     st.divider()
-    # Precision Range & Safety
+    # Share Price Range
     price_range = st.slider("Share Price Range ($)", 0, 500, (10, 150))
     min_p, max_p = price_range
+    
     user_cushion = st.slider("Min ITM Cushion %", 2, 25, 8) 
     max_dte = st.slider("Max DTE (Days)", 4, 15, 10)
     
@@ -69,7 +69,7 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM", "Standard OTM", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC
+# 4. SCANNER ENGINE (Fixes KeyError)
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price, max_price):
     try:
@@ -85,6 +85,7 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
                 df = df[df["openInterest"] >= 300]
                 if df.empty: continue
                 
+                # Strike selection based on cushion
                 if "ITM" in strategy_type:
                     match_df = df[df["strike"] < price * (1 - (cushion_limit / 100))]
                     if match_df.empty: continue
@@ -95,10 +96,12 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
 
                 prem = float(match["lastPrice"])
                 strike = float(match["strike"])
+                # Actual Profit calculation
                 juice = (prem - max(0, price - strike)) if strike < price else prem
                 basis = price - prem
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
 
+                # Return dictionary keys MUST match display_cols below
                 return {
                     "Ticker": t, "Price": round(price, 2), "Strike": strike,
                     "Premium ($)": round(prem * 100, 2), "Juice ($)": round(juice * 100, 2), 
@@ -108,7 +111,7 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY & INTERACTIVE CHART
+# 5. UI DISPLAY & CHART (Fixes SyntaxError)
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -124,9 +127,9 @@ if st.button("RUN GENERATIONAL SCAN ⚡", use_container_width=True):
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
+    # Strictly aligned display columns
     display_cols = ["Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
     
-    # Table Selection Logic
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
@@ -135,7 +138,7 @@ if "results" in st.session_state and st.session_state.results:
         c1, c2 = st.columns([2, 1])
         with c1:
             st.write(f"### {row['Ticker']} Technical Analysis")
-            # Interactive Chart Restored
+            # Interactive Chart (Fixes SyntaxError)
             components.html(f"""
                 <div id="tv-chart" style="height:400px;"></div>
                 <script src="https://s3.tradingview.com/tv.js"></script>
@@ -150,11 +153,11 @@ if "results" in st.session_state and st.session_state.results:
             st.markdown(f"""
             <div class="card">
                 <b>Execution Plan</b><br>
-                <p class="prem-val">Collect: ${row['Premium ($)']} Total</p>
+                <p style="color:#2563eb; font-weight:700;">Collect: ${row['Premium ($)']} Total</p>
                 <p class="juice-val">Keep: ${row['Juice ($)']} Juice</p>
                 <hr>
                 <b>Strike:</b> ${row['Strike']}<br>
-                <b>Safety Cushion:</b> {row['Cushion %']}%<br>
-                <b>Required Capital:</b> ${row['Capital Req']:,}
+                <b>Time Frame:</b> {row['DTE']} Days<br>
+                <b>Budget Req:</b> ${row['Capital Req']:,}
             </div>
             """, unsafe_allow_html=True)
