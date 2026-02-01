@@ -13,7 +13,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import textwrap
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
@@ -31,6 +31,9 @@ st.markdown("""
     .stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
     .earnings-alert {color: #f97316; font-weight: bold; font-size: 14px; margin-bottom: 5px; background: #fff7ed; padding: 5px; border-radius: 6px;}
     .extrinsic-highlight {color: #2563eb; font-weight: bold; font-size: 13px;}
+    .market-banner {padding: 10px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; text-align: center;}
+    .market-open {background-color: #dcfce7; color: #166534; border: 1px solid #86efac;}
+    .market-closed {background-color: #fee2e2; color: #991b1b; border: 1px solid #fca5a5;}
     .disclaimer {font-size: 11px; color: #9ca3af; line-height: 1.4; margin-top: 30px; padding: 20px; border-top: 1px solid #eee;}
 </style>
 """, unsafe_allow_html=True)
@@ -38,6 +41,36 @@ st.markdown("""
 # -------------------------------------------------
 # 2. DATA HELPERS
 # -------------------------------------------------
+def get_market_status():
+    """Checks if NYSE is currently open (9:30-4:00 ET Mon-Fri)."""
+    # Simple UTC-5 approximation for EST (Standard Time)
+    now_utc = datetime.utcnow()
+    now_et = now_utc - timedelta(hours=5) 
+    
+    # Check Weekday (0=Mon, 4=Fri)
+    is_weekday = 0 <= now_et.weekday() <= 4
+    # Check Time
+    current_time = now_et.time()
+    market_open = time(9, 30)
+    market_close = time(16, 0)
+    
+    is_open = is_weekday and (market_open <= current_time <= market_close)
+    return is_open, now_et
+
+@st.cache_data(ttl=300)
+def get_spy_condition():
+    """Fetches SPY price to gauge overall market sentiment."""
+    try:
+        spy = yf.Ticker("SPY")
+        hist = spy.history(period="2d")
+        if len(hist) >= 2:
+            prev_close = hist["Close"].iloc[-2]
+            curr_price = hist["Close"].iloc[-1]
+            pct_change = ((curr_price - prev_close) / prev_close) * 100
+            return curr_price, pct_change
+    except: pass
+    return 0, 0
+
 @st.cache_data(ttl=3600)
 def get_earnings_info(t):
     try:
@@ -73,22 +106,21 @@ def mid_price(row):
 with st.sidebar:
     st.header("🧃 Configuration")
     
-    # Unique Keys to prevent duplicate ID errors
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_final")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_final")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_final")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_final")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v8")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v8")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v8")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v8")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_final")
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v8")
     
     # --- DYNAMIC SLIDERS ---
     delta_val = (0.15, 0.45) 
     if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_final")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v8")
     
     cushion_val = 10 
     if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_final")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v8")
 
     # --- LEGEND ---
     st.markdown("### 📚 Strategy Legend")
@@ -102,7 +134,7 @@ with st.sidebar:
         st.info("**Cash Secured Put:** Paid to wait. Buy stock at a discount.")
 
     st.divider()
-    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_final")
+    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_v8")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -132,13 +164,12 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # --- STRATEGY LOGIC FIX ---
+            # --- STRATEGY LOGIC ---
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price] 
             elif strategy == "Deep ITM Covered Call":
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)] 
             elif strategy == "ATM Covered Call":
-                # FIX: Pick the single strike with minimum distance to price
                 df["dist"] = abs(df["strike"] - price)
                 df = df.sort_values("dist").head(1)
             elif strategy == "Cash Secured Put":
@@ -159,13 +190,12 @@ def scan(t):
 
                 coll_con = strike * 100 if is_put else price * 100
                 
-                # For Deep ITM, Juice = Extrinsic only
                 if strategy == "Deep ITM Covered Call":
                     juice_con = extrinsic * 100
                 else:
                     juice_con = prem * 100
 
-                if juice_con <= 1: continue # Avoid bad data
+                if juice_con <= 1: continue 
 
                 needed = max(1, int(np.ceil(goal / juice_con)))
                 if (needed * coll_con) > acct: continue
@@ -190,11 +220,25 @@ def scan(t):
     except: return None
 
 # -------------------------------------------------
-# 5. RUNNER & DISPLAY
+# 5. UI DISPLAY
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_final"):
+# --- MARKET BANNER ---
+is_open, et_time = get_market_status()
+spy_price, spy_pct = get_spy_condition()
+status_text = "MARKET OPEN 🟢" if is_open else "MARKET CLOSED 🔴"
+status_class = "market-open" if is_open else "market-closed"
+spy_color = "🟢" if spy_pct >= 0 else "🔴"
+
+st.markdown(f"""
+<div class="market-banner {status_class}">
+    {status_text} | Current Time (ET): {et_time.strftime('%I:%M %p')}<br>
+    SPY S&P 500: ${spy_price:.2f} ({spy_color} {spy_pct:+.2f}%)
+</div>
+""", unsafe_allow_html=True)
+
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_v8"):
     with st.spinner("Scanning market..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
@@ -206,21 +250,19 @@ if "results" in st.session_state:
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_final")
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v8")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                # Fixed syntax error in f-string
                 components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{ "autosize": true, "symbol": "{r['RawT']}", "interval": "D", "theme": "light", "container_id": "tv", "studies": ["BB@tv-basicstudies"] }});</script>""", height=510)
             with c2:
                 g = r["Grade"][-1].lower()
                 e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
                 ext_html = f'<div class="extrinsic-highlight">Time Value (Extrinsic): ${r["Extrinsic"]}</div><br>' if strategy == "Deep ITM Covered Call" else ""
 
-                # Fixed HTML Rendering (No Indentation)
                 card_html = f"""
 <div class="card">
 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -228,17 +270,4 @@ if "results" in st.session_state:
 <span class="grade-{g}">{r['Grade']}</span>
 </div>
 {e_html}
-<p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
-<div class="juice-val">{r['Total Return %']}%</div>
-<hr>
-{ext_html}
-<b>Contracts:</b> {r['Contracts']}<br>
-<b>Total Juice:</b> ${r['Total Juice']}<br>
-<hr>
-<b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
-<b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
-</div>
-"""
-                st.markdown(card_html, unsafe_allow_html=True)
-
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings scheduled within 45 days.</div>""", unsafe_allow_html=True)
+<p style="margin:0; font-
