@@ -33,24 +33,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. ENHANCED REAL-TIME HELPERS
+# 2. REAL-TIME HELPERS
 # -------------------------------------------------
-@st.cache_data(ttl=60) # Only cache for 60 seconds for near real-time accuracy
+@st.cache_data(ttl=60)
 def get_live_price(t):
-    """Fetches the most recent trade price available."""
     try:
         tk = yf.Ticker(t)
-        # Attempt 1: Fast Info (Fastest)
         fi = getattr(tk, "fast_info", None)
-        if fi and "last_price" in fi: 
-            return float(fi["last_price"])
-        
-        # Attempt 2: 1-minute interval history (Most reliable for live)
+        if fi and "last_price" in fi: return float(fi["last_price"])
         hist = tk.history(period="1d", interval="1m")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1])
-    except:
-        pass
+        if not hist.empty: return float(hist["Close"].iloc[-1])
+    except: pass
     return None
 
 @st.cache_data(ttl=3600)
@@ -95,8 +88,6 @@ with st.sidebar:
 def scan(t):
     try:
         if funda_filter and not is_healthy(t): return None, (t, ["bad_funda"])
-        
-        # Using the Enhanced Real-Time Price
         price = get_live_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None, (t, ["range"])
         
@@ -118,7 +109,7 @@ def scan(t):
                 df = df[df["strike"] <= price * (1 - cushion_req/100)]
                 if df.empty: continue
                 pick = df.sort_values("strike", ascending=False).iloc[0]
-            else: # ATM or CSP
+            else:
                 df["d"] = abs(df["strike"] - price)
                 pick = df.sort_values("d").iloc[0]
 
@@ -126,7 +117,6 @@ def scan(t):
             if prem <= 0: continue
 
             collateral = strike * 100 if is_put else price * 100
-            
             if is_put:
                 juice = prem * 100
                 upside_pct = 0
@@ -165,10 +155,10 @@ st.title("🧃 JuiceBox Pro")
 with st.expander("📖 OPERATING DIRECTIONS", expanded=False):
     st.markdown("""
     <div class="guide-box">
-    <b>1. Capital & Goal:</b> Enter your total liquid capital and weekly cash flow target.<br>
-    <b>2. Real-Time Price:</b> Scanner uses 1-minute interval data for live pricing accuracy.<br>
-    <b>3. Standard OTM:</b> Strictly targets the next strike price ABOVE the current trading price.<br>
-    <b>4. Analysis:</b> Select a ticker to load the TradingView chart for technical confirmation.
+    <b>1. Set Capital & Goal:</b> Use the sidebar to define your buying power and cash flow targets.<br>
+    <b>2. Real-Time Data:</b> Prices are fetched with 1-minute granularity for live accuracy.<br>
+    <b>3. Strategy Logic:</b> Standard OTM targets growth + income; Deep ITM targets maximum downside protection.<br>
+    <b>4. Charting:</b> Select a ticker to load the live TradingView widget for analysis.
     </div>
     """, unsafe_allow_html=True)
 
@@ -182,4 +172,23 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
-        df = df.sort_values("
+        # FIXED: Line 185 sorting logic is now robust
+        df = df.sort_values("Total Return %", ascending=False)
+        sel = st.dataframe(df, use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
+        if sel.selection.rows:
+            r = df.iloc[sel.selection.rows[0]]
+            st.divider()
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv", "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]}});</script>""", height=510)
+            with c2:
+                g = r["Grade"][-1].lower()
+                st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div><p style="margin:0; font-size:14px; color:#6b7280;">Potential Total Return</p><div class="juice-val">{r['Total Return %']}%</div><hr><b>Live Price:</b> ${r['Price']}<br><b>Strike:</b> ${r['Strike']} | <b>Exp:</b> {r['Expiration']}<br><b>Yield:</b> {r['Yield %']}% | <b>Upside:</b> {r['Upside %']}%</div>""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="disclaimer">
+<b>LEGAL NOTICE & DISCLAIMER:</b> JuiceBox Pro™ is a software tool owned by <b>Bucforty LLC</b>. All prices and calculations are estimates based on 
+third-party market data. Options trading involves risk. By using this tool, you agree to hold Bucforty LLC harmless from any financial decisions or 
+losses. This tool does not provide investment advice.
+</div>
+""", unsafe_allow_html=True)
