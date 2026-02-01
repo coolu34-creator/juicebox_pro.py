@@ -104,10 +104,9 @@ with st.sidebar:
     if is_itm_call or is_itm_put:
         cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion")
 
-    # --- NEW FILTERS ---
     st.divider()
     f_sound = st.toggle("Fundamental Sound Stocks", value=False, help="Filters for companies with positive earnings and analyst backing.")
-    etf_only = st.toggle("ETF Only Mode", value=False, help="Restricts search to Exchange Traded Funds for lower volatility.")
+    etf_only = st.toggle("ETF Only Mode", value=False, help="Restricts search to Exchange Traded Funds.")
     
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f}")
 
@@ -121,15 +120,9 @@ with st.sidebar:
 def scan(t):
     try:
         tk = yf.Ticker(t)
-        
-        # ETF Filter
-        if etf_only:
-            if tk.info.get('quoteType') != 'ETF': return None
-            
-        # Fundamental Sound Filter
+        if etf_only and tk.info.get('quoteType') != 'ETF': return None
         if f_sound:
             info = tk.info
-            # Check for positive EPS and at least a 'hold' or better rating
             if info.get('trailingEps', -1) <= 0: return None
             if info.get('recommendationKey') not in ['buy', 'strong_buy', 'hold']: return None
 
@@ -197,9 +190,8 @@ with st.expander("🚀 How to Use JuiceBox Pro™"):
     * **Set Your Foundation:** Enter your Account Value in the sidebar.
     * **Define Your Goal:** Switch between **$** or **%** mode.
     * **Choose Your "Juice" Type:** Select your strategy.
-    * **Apply Filters:** Toggle **Fundamental Sound** or **ETF Only** for safer plays.
     * **Run the Scan:** OI 500+ and Extrinsic calculations are applied.
-    * **Analyze the Results:** **🎯 indicates weekly goal met in one trade.**
+    * **Analyze the Results:** **🎯 indicates weekly goal met in one trade.** Chart includes Bollinger Bands.
     """)
 
 with st.expander("📚 The JuiceBox Legend"):
@@ -230,7 +222,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn"):
-    with st.spinner(f"Scanning for {goal_amt:,.2f} weekly goal..."):
+    with st.spinner(f"Scanning watchlist..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
@@ -247,7 +239,21 @@ if "results" in st.session_state:
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                tv_html = f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true,"symbol": "{r['RawT']}","interval": "D","theme": "light","container_id": "tv"}});</script>"""
+                # TradingView Widget with Bollinger Bands (BB@tv-basicstudies)
+                tv_html = f"""
+                <div id="tv" style="height:500px"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                    "autosize": true,
+                    "symbol": "{r['RawT']}",
+                    "interval": "D",
+                    "theme": "light",
+                    "container_id": "tv",
+                    "studies": ["BB@tv-basicstudies"]
+                }});
+                </script>
+                """
                 components.html(tv_html, height=510)
             with c2:
                 g = r["Grade"][-1].lower()
@@ -263,4 +269,4 @@ if "results" in st.session_state:
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Goal-based scanning active.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Information is for educational purposes only.</div>""", unsafe_allow_html=True)
