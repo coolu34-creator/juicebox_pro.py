@@ -79,7 +79,6 @@ def mid_price(row):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    # Added unique keys to resolve StreamlitDuplicateElementId
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct")
     
     c1, c2 = st.columns(2)
@@ -131,7 +130,7 @@ def scan(t):
             elif strategy == "Cash Secured Put":
                 if put_mode == "OTM":
                     df = df[df["strike"] <= price * (1 - cushion_val / 100)]
-                else: # ITM Put Mode
+                else: 
                     df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
             for _, row in df.iterrows():
@@ -139,27 +138,29 @@ def scan(t):
                 open_int = row.get("openInterest", 0)
                 if open_int < 500 or total_prem <= 0: continue
 
-                # Extrinsic Math (Checking for time value)
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
                 if intrinsic > 0 and extrinsic <= 0.05: continue
 
-                # ITM Logic: Juice is Extrinsic only
                 juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
 
                 total_ret = (juice_con / coll_con) * 100
-                
                 needed = max(1, int(np.ceil(goal_amt / (juice_con if juice_con > 0 else 1))))
+                
                 if (needed * coll_con) > acct: continue
 
+                # Determine if goal is met
+                total_juice = juice_con * needed
+                goal_met_icon = " 🎯" if total_juice >= goal_amt else ""
+
                 res = {
-                    "Ticker": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
+                    "Ticker": f"{t}{goal_met_icon}", "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
                     "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "OI": int(open_int),
                     "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
                     "Total Prem": round(total_prem * 100, 2), "Total Return %": round(total_ret, 2), 
-                    "Contracts": needed, "Total Juice": round(juice_con * needed, 2), 
+                    "Contracts": needed, "Total Juice": round(total_juice, 2), 
                     "Collateral": round(needed * coll_con, 0)
                 }
                 if not best or total_ret > best["Total Return %"]: best = res
@@ -171,53 +172,48 @@ def scan(t):
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-# --- USER GUIDES & LEGENDS ---
 with st.expander("🚀 How to Use JuiceBox Pro™"):
     st.markdown("""
-    * **Set Your Foundation:** Enter your Account Value in the sidebar. The tool uses this to make sure it doesn't suggest trades that require more collateral than you have available.
-    * **Define Your Goal:** Use the Weekly Goal % or $ fields. The app will automatically calculate how many contracts you need to sell to hit that target.
-    * **Choose Your "Juice" Type:** Select a strategy from the dropdown. If you want safety with a high probability of keeping the stock, choose Deep ITM. If you want to buy stocks at a discount, choose Cash Secured Put.
-    * **Run the Scan:** Click RUN LIVE SCAN ⚡. The app will filter through your watchlist for contracts with at least 500 Open Interest (meaning they are easy to trade) and calculate the Extrinsic Value (your actual profit).
-    * **Analyze the Results:** Click a row in the table to see the TradingView chart and a breakdown of how much of the premium is "real profit" (Extrinsic) versus "built-in value" (Intrinsic).
+    * **Set Your Foundation:** Enter your Account Value in the sidebar.
+    * **Define Your Goal:** Use the Weekly Goal % or $ fields.
+    * **Choose Your "Juice" Type:** Select a strategy from the dropdown.
+    * **Run the Scan:** Click RUN LIVE SCAN ⚡. OI 500+ and Extrinsic Value calculations are applied.
+    * **Analyze the Results:** Click a row to see the TradingView chart and premium breakdown. **🎯 indicates weekly goal met in one trade.**
     """)
 
 with st.expander("📚 The JuiceBox Legend"):
-    st.write("Selling options is like being the insurance company instead of the policyholder. You collect a 'premium' upfront in exchange for taking on a specific obligation.")
     data = {
         "Term": ["Strike Price", "Expiration", "Extrinsic (Juice)", "Intrinsic Value", "DTE", "OI (Open Interest)", "Collateral"],
         "What it means in plain English": [
-            "The 'agreed-upon' price where the stock will be bought or sold if the option is exercised.",
-            "The 'deadline' date. If the stock doesn't hit the target by this date, the contract usually expires worthless, and you keep all the money.",
-            "This is your true profit. It is the 'time value' of the contract. It shrinks every day until it hits $0 at expiration, which is what you want as a seller.",
-            "This is 'built-in' value. If a stock is at $15 and your strike is $10, there is $5 of intrinsic value. You don't 'earn' this; it's just a placeholder for the price difference.",
-            "Days to Expiration. How many days are left for the trade to play out.",
-            "How many people are currently holding this contract. High OI (500+) means it's a popular 'liquid' contract that is easy to enter and exit.",
-            "The amount of cash or stock you must 'lock up' in your account to guarantee you can fulfill the contract."
+            "The price where the stock will be bought/sold if exercised.",
+            "The deadline date for the contract.",
+            "Your true profit (time value). Hits $0 at expiration.",
+            "Built-in value (Price vs Strike). Not real profit.",
+            "Days to Expiration.",
+            "Active contracts in the market. 500+ = high liquidity.",
+            "Cash/Stock locked up to guarantee the trade."
         ]
     }
     st.table(pd.DataFrame(data))
 
 with st.expander("💡 Strategy Quick-Guide"):
     st.markdown("""
-    * **Covered Call:** You own 100 shares of a stock and "rent them out" by selling a call. You keep the rent (premium). If the stock price stays below the strike, you keep the shares and the rent.
-    * **Deep ITM (In-The-Money):** A very conservative version of the above. You sell a strike price far below the current stock price. It offers a massive "cushion" against the stock falling, but your profit is strictly limited to the Extrinsic Value.
-    * **Cash Secured Put:** You set aside cash to buy a stock at a lower price. You get paid (the premium) just for waiting. If the stock stays above your strike, you keep the cash and the profit. If it falls below, you use your cash to buy the stock at the strike price (which is like buying it at a discount).
+    * **Covered Call:** Rent out 100 shares you own for premium.
+    * **Deep ITM:** Safety play. Large price cushion, extrinsic profit only.
+    * **Cash Secured Put:** Get paid to wait to buy stock at a discount.
     """)
 
-# --- MARKET STATUS ---
 is_open, et_time = get_market_status()
 spy_price, spy_pct = get_spy_condition()
 st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market-closed'}">
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn"):
-    # Fixed IndentationError: Code block must follow spinner
     with st.spinner(f"Scanning for {goal_pct}% yield opportunities..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
 
-# --- RESULTS TABLE ---
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
@@ -230,7 +226,7 @@ if "results" in st.session_state:
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                tv_html = f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true,"symbol": "{r['Ticker']}","interval": "D","theme": "light","container_id": "tv"}});</script>"""
+                tv_html = f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true,"symbol": "{r['RawT']}","interval": "D","theme": "light","container_id": "tv"}});</script>"""
                 components.html(tv_html, height=510)
             with c2:
                 g = r["Grade"][-1].lower()
@@ -246,4 +242,4 @@ if "results" in st.session_state:
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Information is for educational purposes only.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Goal-based scanning active.</div>""", unsafe_allow_html=True)
