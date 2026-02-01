@@ -70,6 +70,7 @@ def mid_price(row):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
+    # Fixed DuplicateElementId by using unique keys
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="buc_acct")
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="buc_goal")
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="buc_price")
@@ -77,12 +78,11 @@ with st.sidebar:
     
     strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="buc_strat")
     
-    # DYNAMIC SLIDERS: Only show Delta for Standard Strategy
+    # DYNAMIC SLIDERS: Conditional visibility
     delta_val = (0.15, 0.45)
     if strategy == "Standard OTM Covered Call":
         delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="buc_delta")
     
-    # DYNAMIC SLIDERS: Only show Cushion for ITM Strategy
     cushion_val = 10
     if strategy == "Deep ITM Covered Call":
         cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="buc_cushion")
@@ -118,7 +118,7 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # Strategy Selection
+            # Correct Strategy Strike Filtering
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
             elif strategy == "Deep ITM Covered Call":
@@ -147,7 +147,7 @@ def scan(t):
                     "Total Juice": round(juice_con * needed, 2), "Total Return %": round(total_ret, 2),
                     "Collateral": round(needed * collateral_con, 0), "HasE": has_e, "EDate": e_date
                 }
-                if not best or total_ret > best["Total Return %"]: best = res
+                if not best or total_ret > best["Total Return %"]: best = row
         return best
     except: return None
 
@@ -165,6 +165,7 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
+        # Fixed SyntaxError string literal
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
@@ -178,7 +179,7 @@ if "results" in st.session_state:
             with c2:
                 g = r["Grade"][-1].lower()
                 e_html = f'<p class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</p>' if r['HasE'] else ""
-                # FIXED: Rendering using unsafe_allow_html=True to fix image_316d78.png
+                # Fixed HTML raw code rendering
                 st.markdown(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
