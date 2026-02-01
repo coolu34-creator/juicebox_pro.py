@@ -12,7 +12,6 @@ import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import textwrap
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
@@ -68,7 +67,7 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR (Unique Keys to fix crashes)
+# 3. SIDEBAR (Unique Keys)
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
@@ -131,14 +130,13 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # --- CRITICAL FIX: STRATEGY STRIKE SELECTION ---
+            # --- STRATEGY STRIKE SELECTION ---
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price] # Must be OTM
             elif strategy == "Deep ITM Covered Call":
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)] # Must be Deep ITM
             elif strategy == "ATM Covered Call":
-                # STRICTLY FIND CLOSEST STRIKE. Do not iterate whole chain.
-                # Sort by distance to price and take the top 1
+                # STRICTLY FIND CLOSEST STRIKE
                 df["dist"] = abs(df["strike"] - price)
                 df = df.sort_values("dist").head(1)
             elif strategy == "Cash Secured Put":
@@ -180,7 +178,6 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_main"):
     with st.spinner("Analyzing market data..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
-    # Filter out None values to prevent "Ambiguous Truth" error
     st.session_state.results = [r for r in out if r is not None]
 
 if "results" in st.session_state:
@@ -201,24 +198,24 @@ if "results" in st.session_state:
                 g = r["Grade"][-1].lower()
                 e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
                 
-                # HTML RENDERING FIX: Removed indentation and used textwrap
-                card_html = textwrap.dedent(f"""
-                <div class="card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h2 style="margin:0;">{r['Ticker']}</h2>
-                        <span class="grade-{g}">{r['Grade']}</span>
-                    </div>
-                    {e_html}
-                    <p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
-                    <div class="juice-val">{r['Total Return %']}%</div>
-                    <hr>
-                    <b>Contracts:</b> {r['Contracts']}<br>
-                    <b>Total Juice:</b> ${r['Total Juice']}<br>
-                    <hr>
-                    <b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
-                    <b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
-                </div>
-                """)
+                # --- DISPLAY FIX: REMOVED INDENTATION ---
+                # This ensures Streamlit sees this as HTML, not a code block
+                card_html = f"""
+<div class="card">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<h2 style="margin:0;">{r['Ticker']}</h2>
+<span class="grade-{g}">{r['Grade']}</span>
+</div>
+{e_html}
+<p style="margin:0; font-size:14px; color:#6b7280; margin-top:10px;">Potential Total Return</p>
+<div class="juice-val">{r['Total Return %']}%</div>
+<hr>
+<b>Contracts:</b> {r['Contracts']}<br>
+<b>Total Juice:</b> ${r['Total Juice']}<br>
+<hr>
+<b>Price:</b> ${r['Price']} | <b>Strike:</b> ${r['Strike']}<br>
+<b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)
+</div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
 st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings scheduled within 45 days.</div>""", unsafe_allow_html=True)
