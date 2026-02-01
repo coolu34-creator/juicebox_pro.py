@@ -24,7 +24,6 @@ st.markdown("""
 <style>
     .grade-a { background:#22c55e;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
     .grade-b { background:#eab308;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
-    .grade-c { background:#ef4444;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
     .card {border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:white;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); color: #1f2937; margin-top: 10px;}
     .juice-val {color:#16a34a;font-size:26px;font-weight:800;margin:10px 0;}
     .stButton>button {border-radius:12px;font-weight:700;height:3em;background-color:#16a34a !important; color: white !important;}
@@ -86,6 +85,9 @@ with st.sidebar:
     dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30))
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"])
     cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10) if strategy == "Deep ITM Covered Call" else 0
+    
+    # New Filter Info
+    st.info("💡 **Liquidity Filter Active:** Scanning for contracts with **500+** Open Interest.")
 
     st.divider()
     text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
@@ -109,7 +111,7 @@ def scan(t):
 
             chain = tk.option_chain(exp)
             is_put = strategy == "Cash Secured Put"
-            df = chain.puts if is_put else chain.calls
+            df = chain.calls if not is_put else chain.puts
             
             if strategy == "Deep ITM Covered Call":
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)]
@@ -118,15 +120,20 @@ def scan(t):
 
             for _, row in df.iterrows():
                 strike, total_prem = row["strike"], mid_price(row)
+                open_int = row.get("openInterest", 0)
+                
+                # --- LIQUIDITY FILTER (500+ Open Interest) ---
+                if open_int < 500: continue
                 if total_prem <= 0: continue
 
                 # --- EXTRINSIC & INTRINSIC CALC ---
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
-                # Filter for time value only if ITM strategy is picked
+                # Time value check for ITM
                 if strategy == "Deep ITM Covered Call" and extrinsic <= 0.05: continue
 
+                # Juice extraction: Extrinsic only for ITM
                 juice_con = extrinsic * 100 if strategy == "Deep ITM Covered Call" else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
 
@@ -134,16 +141,17 @@ def scan(t):
                 upside = ((strike - price) / price * 100) if not is_put and strike > price else 0
                 total_ret = ((juice_con / coll_con) * 100) + upside
                 
-                needed = max(1, int(np.ceil(goal / juice_con)))
+                needed = max(1, int(np.ceil(goal / (juice_con if juice_con > 0 else 1))))
                 if (needed * coll_con) > acct: continue
 
                 res = {
                     "Ticker": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
                     "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "DTE": exp_dte,
                     "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
-                    "Total Prem": round(total_prem * 100, 2), "Juice/Con": round(juice_con, 2),
-                    "Total Return %": round(total_ret, 2), "Contracts": needed,
-                    "Total Juice": round(juice_con * needed, 2), "Collateral": round(needed * coll_con, 0)
+                    "Total Prem": round(total_prem * 100, 2), "OI": int(open_int),
+                    "Juice/Con": round(juice_con, 2), "Total Return %": round(total_ret, 2), 
+                    "Contracts": needed, "Total Juice": round(juice_con * needed, 2), 
+                    "Collateral": round(needed * coll_con, 0)
                 }
                 if not best or total_ret > best["Total Return %"]: best = res
         return best
@@ -159,7 +167,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
-    with st.spinner("Analyzing premiums..."):
+    with st.spinner("Filtering for liquid premiums (OI 500+)..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     st.session_state.results = [r for r in out if r is not None]
@@ -168,8 +176,8 @@ if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
-        # --- ADDED EXT/INT/TOTAL COLUMNS ---
-        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Extrinsic", "Intrinsic", "Total Prem", "Juice/Con", "Total Return %"]
+        # Added OI column to table
+        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
         
         if sel.selection.rows:
@@ -185,14 +193,15 @@ if "results" in st.session_state:
                 <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
                 <div class="juice-val">{r['Total Return %']}%</div>
                 <hr>
-                <b>Premium Breakdown (per contract):</b><br>
-                Time Value (Extrinsic): ${r['Extrinsic']}<br>
-                Built-in (Intrinsic): ${r['Intrinsic']}<br>
-                Total Premium: ${r['Total Prem']}<br>
+                <b>Open Interest:</b> {r['OI']:,}<br>
+                <b>Breakdown (per contract):</b><br>
+                Extrinsic (Time): ${r['Extrinsic']}<br>
+                Intrinsic (Built-in): ${r['Intrinsic']}<br>
+                Total Prem: ${r['Total Prem']}<br>
                 <hr>
                 <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']}<br>
                 <b>Collateral:</b> ${r['Collateral']:,.0f}
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Premium data is based on mid-price estimates.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. 500+ OI filter enabled.</div>""", unsafe_allow_html=True)
