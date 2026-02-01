@@ -2,7 +2,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,118 +10,153 @@ from concurrent.futures import ThreadPoolExecutor
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
-# Custom CSS for Grading Bubbles and Cards
-st.markdown("""
+st.markdown(
+    """
 <style>
-    .grade-a { background-color: #22c55e; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
-    .grade-b { background-color: #eab308; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
-    .grade-c { background-color: #ef4444; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
-    .card { border: 1px solid #e2e8f0; border-radius: 15px; padding: 20px; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .grade-a { background-color: #22c55e; color: white; padding: 4px 10px; border-radius: 20px; font-weight: 700; }
+    .grade-b { background-color: #eab308; color: white; padding: 4px 10px; border-radius: 20px; font-weight: 700; }
+    .grade-c { background-color: #ef4444; color: white; padding: 4px 10px; border-radius: 20px; font-weight: 700; }
+
+    .card { border: 1px solid #e2e8f0; border-radius: 15px; padding: 20px; background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
+
     .juice-val { color: #16a34a; font-size: 28px; font-weight: 800; margin: 0; }
+    .muted { color: #64748b; font-size: 12px; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # -------------------------------------------------
-# 2. SIDEBAR: GOALS & COLLATERAL GUARD
+# 2. HELPERS
+# -------------------------------------------------
+@st.cache_data(ttl=300)
+def get_price(ticker: str) -> float | None:
+    """Robust last price fetch."""
+    try:
+        tk = yf.Ticker(ticker)
+        # fast_info is fast but sometimes missing/None
+        fi = getattr(tk, "fast_info", None)
+        if fi and fi.get("last_price"):
+            return float(fi["last_price"])
+    except Exception:
+        pass
+
+    try:
+        tk = yf.Ticker(ticker)
+        hist = tk.history(period="5d", interval="1d")
+        if hist is not None and not hist.empty:
+            return float(hist["Close"].dropna().iloc[-1])
+    except Exception:
+        pass
+
+    return None
+
+
+def mid_price(row) -> float:
+    """Use mid if bid/ask exist, else fallback to lastPrice."""
+    bid = row.get("bid", np.nan)
+    ask = row.get("ask", np.nan)
+    lastp = row.get("lastPrice", np.nan)
+
+    if pd.notna(bid) and pd.notna(ask) and ask > 0:
+        m = (float(bid) + float(ask)) / 2.0
+        # if spread is insane, fallback
+        if m > 0:
+            return m
+
+    if pd.notna(lastp) and float(lastp) > 0:
+        return float(lastp)
+
+    return 0.0
+
+
+def grade_from_cushion(cushion_pct: float) -> str:
+    if cushion_pct >= 12:
+        return "🟢 A"
+    if cushion_pct >= 7:
+        return "🟡 B"
+    return "🔴 C"
+
+
+# -------------------------------------------------
+# 3. SIDEBAR
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Juice Settings")
-    total_acc = st.number_input("Account Value ($)", value=10000)
-    weekly_goal = st.number_input("Weekly Goal ($)", value=150)
-    
-    # Collateral Guard
+
+    total_acc = st.number_input("Account Value ($)", value=10000, min_value=0, step=500)
+    weekly_goal = st.number_input("Weekly Goal ($)", value=150, min_value=0, step=10)
+
     max_safe = total_acc * 0.03
-    if weekly_goal > max_safe:
-        st.warning(f"⚠️ High Risk: Goal exceeds 3% of collateral (${max_safe:,.0f}).")
-    
+    if weekly_goal > max_safe and total_acc > 0:
+        st.warning(f"⚠️ High Risk: Goal exceeds 3% of account (${max_safe:,.0f}).")
+
     st.divider()
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
-    user_cushion = st.slider("Min ITM Cushion %", 5, 25, 10) if "Deep ITM" in strategy else 0
-    
+
+    strategy = st.selectbox(
+        "Strategy",
+        ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"],
+    )
+
+    user_cushion = 0
+    if strategy == "Deep ITM Covered Call":
+        user_cushion = st.slider("Min ITM Cushion % (strike below price)", 5, 25, 10)
+
+    st.divider()
+
+    show_diagnostics = st.checkbox("Show scan diagnostics", value=False)
+
     tickers = ["AAPL", "NVDA", "AMD", "TSLA", "PLTR", "SOXL", "TQQQ", "SPY", "QQQ", "BITX"]
 
+
 # -------------------------------------------------
-# 3. SCANNER ENGINE
+# 4. SCANNER ENGINE
 # -------------------------------------------------
-def scan_ticker(t, strategy_type, target_goal, cushion_limit, account_total):
+def scan_ticker(ticker: str, strategy_type: str, target_goal: float, cushion_limit: float, account_total: float):
+    """
+    Returns best option candidate dict for this ticker, else None.
+    - Calls: juice = EXTRINSIC only (premium - intrinsic)
+    - CSP: juice = premium
+    """
+    diag = []
+
     try:
-        stock = yf.Ticker(t)
-        price = stock.fast_info['last_price']
-        
-        for exp in stock.options[:2]: # Check nearest 2 expirations
-            chain = stock.option_chain(exp)
-            df = chain.puts if "Put" in strategy_type else chain.calls
-            
-            if "Deep ITM" in strategy_type:
-                match_df = df[df["strike"] < price * (1 - (cushion_limit / 100))]
-                if match_df.empty: continue
-                match = match_df.sort_values("strike", ascending=False).iloc[0]
-            else:
-                df["diff"] = abs(df["strike"] - price)
-                match = df.sort_values("diff").iloc[0]
+        price = get_price(ticker)
+        if price is None or price <= 0:
+            diag.append("no_price")
+            return (None, (ticker, diag))
 
-            prem = float(match["lastPrice"])
-            strike = float(match["strike"])
-            juice_per_contract = (prem - max(0, price - strike)) * 100 if "Call" in strategy_type else prem * 100
-            contracts = int(np.ceil(target_goal / juice_per_contract)) if juice_per_contract > 0 else 0
-            
-            collateral = (price * 100 * contracts) if "Call" in strategy_type else (strike * 100 * contracts)
-            if collateral > account_total: return None
+        tk = yf.Ticker(ticker)
+        opts = getattr(tk, "options", None)
 
-            cushion = round(((price - (price - prem)) / price) * 100, 1)
-            grade = "🟢 A" if cushion > 12 else "🟡 B" if cushion > 7 else "🔴 C"
+        if not opts:
+            diag.append("no_options_chain")
+            return (None, (ticker, diag))
 
-            return {
-                "Ticker": t, "Grade": grade, "Price": round(price, 2), "Strike": strike,
-                "Juice/Con": round(juice_per_contract, 2), "Contracts": contracts,
-                "Cushion %": cushion, "ROI %": round((juice_per_contract/collateral)*100, 2)
-            }
-    except: return None
+        expirations = opts[:2]  # nearest 2 expirations
+        best = None
 
-# -------------------------------------------------
-# 4. DASHBOARD EXECUTION
-# -------------------------------------------------
-if st.button("RUN GENERATIONAL SCAN ⚡", use_container_width=True):
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, total_acc), tickers) if r]
-    st.session_state.results = results
+        for exp in expirations:
+            try:
+                chain = tk.option_chain(exp)
+            except Exception:
+                diag.append(f"bad_chain:{exp}")
+                continue
 
-if "results" in st.session_state:
-    df = pd.DataFrame(st.session_state.results)
-    # Display table with selection
-    sel = st.dataframe(df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+            is_put = (strategy_type == "Cash Secured Put")
+            df = chain.puts.copy() if is_put else chain.calls.copy()
+            if df.empty:
+                diag.append(f"empty_chain:{exp}")
+                continue
 
-    if sel.selection.rows:
-        row = df.iloc[sel.selection.rows[0]]
-        st.divider()
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # BACK: Chart with Bollinger Bands enabled
-            components.html(f"""
-                <div id="tradingview_chart" style="height:450px;"></div>
-                <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-                <script type="text/javascript">
-                new TradingView.widget({{
-                  "autosize": true, "symbol": "{row['Ticker']}", "interval": "D",
-                  "timezone": "Etc/UTC", "theme": "light", "style": "1",
-                  "locale": "en", "toolbar_bg": "#f1f3f6", "enable_publishing": false,
-                  "hide_side_toolbar": false, "allow_symbol_change": true,
-                  "container_id": "tradingview_chart", "studies": ["BB@tv-basicstudies"]
-                }});
-                </script>
-            """, height=460)
-            
-        with col2:
-            st.markdown(f"""
-                <div class="card">
-                    <h3>{row['Ticker']} <span class="grade-{row['Grade'][-1].lower()}">{row['Grade']}</span></h3>
-                    <p class="juice-val">${row['Juice/Con'] * row['Contracts']:,.2f} Total Juice</p>
-                    <hr>
-                    <b>Contracts to Sell:</b> {row['Contracts']}<br>
-                    <b>Strike Price:</b> ${row['Strike']}<br>
-                    <b>Cushion:</b> {row['Cushion %']}%<br>
-                    <p style="font-size: 12px; color: gray; margin-top:10px;">
-                    Ensure strike is below the lower Bollinger Band for maximum safety.</p>
-                </div>
-            """, unsafe_allow_html=True)
+            # Pick strike candidate
+            if strategy_type == "Deep ITM Covered Call":
+                # strike must be BELOW price by at least cushion_limit%
+                cutoff = price * (1 - cushion_limit / 100.0)
+                matches = df[df["strike"] <= cutoff].copy()
+                if matches.empty:
+                    diag.append(f"no_deep_itm:{exp}")
+                    continue
+                # choose the highest strike under cutoff (closest to price while still deep ITM)
+                matches = matches.sort_values_
