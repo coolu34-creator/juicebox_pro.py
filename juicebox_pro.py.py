@@ -45,7 +45,7 @@ def get_market_sentiment():
         return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# Corrected: Pre-define variables to prevent NameError in status bar
+# Fix: Initialize variables early to prevent NameError
 spy_ch, v_vix, s_c = get_market_sentiment()
 status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
 
@@ -53,7 +53,7 @@ status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now(
 # 3. SIDEBAR: ACCOUNT & SECTOR FILTERS
 # -------------------------------------------------
 TICKER_MAP = {
-    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITO", "FAS", "SPXL", "SQQQ", "UVXY"],
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITX", "FAS", "SPXL", "SQQQ", "UVXY"],
     "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
     "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
     "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
@@ -62,7 +62,8 @@ TICKER_MAP = {
 }
 
 with st.sidebar:
-    st.image("https://images.unsplash.com/photo-1530268585673-b29517dc009a?q=80&w=300&auto=format&fit=crop", caption="Generational Wealth", use_container_width=True)
+    # UPDATED BRANDING: High-quality reliable link
+    st.image("https://images.unsplash.com/photo-1573167101669-476638b58cea?q=80&w=400&auto=format&fit=crop", caption="Generational Wealth", use_container_width=True)
     
     st.subheader("🗓️ Weekly Account Engine")
     total_account = st.number_input("Account Value ($)", value=10000, step=1000)
@@ -80,14 +81,13 @@ with st.sidebar:
     st.divider()
     st.subheader("🛡️ Safety & Liquidity")
     min_oi = st.number_input("Min Open Interest", value=500)
-    min_cushion_req = st.slider("Min Safety Cushion %", 0, 20, 5)
     max_price = st.slider("Max Share Price ($)", 10, 500, 100)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC (Fixes KeyError)
+# 4. SCANNER ENGINE (Cushion & Contracts)
 # -------------------------------------------------
-def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit, min_cushion):
+def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
     try:
         stock = yf.Ticker(t)
         info = stock.info
@@ -103,7 +103,7 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit, min_cushion):
                 if df.empty: continue
                 
                 if strategy_type == "Deep ITM Covered Call":
-                    match_df = df[df["strike"] < share_price * (1 - min_cushion/100)]
+                    match_df = df[df["strike"] < share_price * 0.92]
                     if match_df.empty: continue
                     match = match_df.sort_values("strike", ascending=False).iloc[0]
                 elif strategy_type == "ATM (At-the-Money)":
@@ -117,16 +117,16 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit, min_cushion):
                 basis = share_price - premium
                 roi = (juice / basis) * 100
                 
-                # Contracts & Capital Calculations
-                contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
+                # Contracts and Capital Calculations
+                juice_per_contract = juice * 100
+                contracts = int(np.ceil(week_goal / juice_per_contract)) if juice_per_contract > 0 else 0
                 capital_req = (share_price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
                 cushion_pct = ((share_price - basis) / share_price) * 100
 
                 return {
-                    "Ticker": t, "Price": round(share_price, 2), "Strike": float(match["strike"]),
-                    "Juice ($)": round(juice * 100, 2), "ROI %": round(roi, 2),
+                    "Ticker": t, "Juice ($)": round(juice_per_contract, 2), "ROI %": round(roi, 2),
                     "Cushion %": round(cushion_pct, 2), "Contracts": contracts, 
-                    "Capital Req ($)": round(capital_req, 2), "OI": int(match["openInterest"]), "DTE": dte
+                    "Capital Req ($)": round(capital_req, 2), "OI": int(match["openInterest"])
                 }
     except: return None
 
@@ -144,13 +144,12 @@ if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
     univ = []
     for s in selected_sectors: univ.extend(TICKER_MAP[s])
     with ThreadPoolExecutor(max_workers=25) as ex:
-        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi, min_cushion_req), list(set(univ))) if r]
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    
-    # Corrected: Explicitly define columns to prevent KeyError
+    # Fix: Ensure column list exactly matches data dictionary keys
     display_cols = ["Ticker", "Juice ($)", "ROI %", "Cushion %", "Contracts", "Capital Req ($)"]
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
@@ -159,4 +158,26 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            components.html(f'<div id="tv" style="height:400px;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize":true,"symbol":"{row["Ticker"]}","interval":"D","theme":"light","style":"1","container_id":"tv"}});</
+            # Fix: Triple quotes to prevent f-string literal errors
+            components.html(f"""
+                <div id="tv" style="height:400px;"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                    "autosize": true, "symbol": "{row['Ticker']}", 
+                    "interval": "D", "theme": "light", "style": "1", "container_id": "tv"
+                }});
+                </script>
+            """, height=420)
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+                <b>{row['Ticker']} Weekly Analysis</b><br>
+                <p class="juice-val">${row['Juice ($)']} Juice</p>
+                <p class="cap-val">Budget Needed: ${row['Capital Req ($)']:,}</p>
+                <hr>
+                <b>Weekly Contracts:</b> {row['Contracts']}<br>
+                <b>Safety Cushion:</b> {row['Cushion %']}%<br>
+                <b>Liquidity (OI):</b> {row['OI']}
+            </div>
+            """, unsafe_allow_html=True)
