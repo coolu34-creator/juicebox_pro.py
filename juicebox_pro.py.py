@@ -68,27 +68,27 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR (Fixed Unique Keys)
+# 3. SIDEBAR (HARD KEY ASSIGNMENT)
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
     
-    # Unique keys prevent "DuplicateElementId" errors
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte")
+    # We assign explicit strings to 'key' to prevent ANY duplication
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="input_account_val")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="input_weekly_goal")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="slider_price_rng")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="slider_dte_rng")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat")
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="select_strategy_type")
     
     # --- DYNAMIC SLIDERS ---
     delta_val = (0.15, 0.45) # Default
     if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="slider_delta_val")
     
     cushion_val = 10 # Default
     if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="slider_cushion_val")
 
     # --- STRATEGY LEGEND ---
     st.markdown("### 📚 Strategy Legend")
@@ -102,7 +102,7 @@ with st.sidebar:
         st.info("**Cash Secured Put:** Paid to wait. Collects rent while waiting to buy at a discount.")
 
     st.divider()
-    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
+    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="input_ticker_list")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -170,11 +170,11 @@ def scan(t):
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_scan"):
     with st.spinner("Processing live market data..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
-    # FIXED: Check 'r is not None' to avoid DataFrame truth value error
+    # CHECK for None to prevent crashes
     st.session_state.results = [r for r in out if r is not None]
 
 if "results" in st.session_state:
@@ -183,7 +183,7 @@ if "results" in st.session_state:
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_dataframe")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
@@ -195,7 +195,7 @@ if "results" in st.session_state:
                 g = r["Grade"][-1].lower()
                 e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
                 
-                # FIXED: HTML rendering issue by using textwrap.dedent and unsafe_allow_html
+                # HTML RENDERING FIX: Use textwrap to remove indentation
                 card_html = textwrap.dedent(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
