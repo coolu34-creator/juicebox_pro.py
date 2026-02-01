@@ -66,26 +66,36 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR & DYNAMIC SLIDERS
+# 3. SIDEBAR & DYNAMIC UI
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    # Fixed DuplicateElementId by using unique keys
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="buc_acct")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="buc_goal")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="buc_price")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="buc_dte")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="buc_acct_input")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="buc_goal_input")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="buc_price_range")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="buc_dte_range")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="buc_strat")
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="buc_strategy_select")
     
-    # DYNAMIC SLIDERS: Conditional visibility
+    # Dynamic Controls: Delta for Standard, Cushion for ITM
     delta_val = (0.15, 0.45)
     if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="buc_delta")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="buc_delta_slider")
     
     cushion_val = 10
     if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="buc_cushion")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="buc_itm_cushion")
+
+    # Legend Logic
+    st.markdown("### 📚 Strategy Legend")
+    if strategy == "Standard OTM Covered Call":
+        st.info("**Standard OTM:** Targets growth + premium. Selects strikes above market price.")
+    elif strategy == "Deep ITM Covered Call":
+        st.success("**Deep ITM:** Maximizes downside protection ('Cushion'). Targets income over growth.")
+    elif strategy == "ATM Covered Call":
+        st.warning("**ATM:** High premium but zero room for stock growth before assignment.")
+    else:
+        st.info("**Cash Secured Put:** Paid to wait. Collects rent while waiting to buy at a discount.")
 
     st.divider()
     text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
@@ -118,7 +128,6 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # Correct Strategy Strike Filtering
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
             elif strategy == "Deep ITM Covered Call":
@@ -128,36 +137,35 @@ def scan(t):
                 strike, prem = row["strike"], mid_price(row)
                 if prem <= 0: continue
 
-                # Delta Prob check (only for standard)
                 approx_delta = 1.0 - abs(strike - price) / price
                 if strategy == "Standard OTM Covered Call":
                     if not (delta_val[0] <= approx_delta <= delta_val[1]): continue
 
-                collateral_con = strike * 100 if is_put else price * 100
+                coll_con = strike * 100 if is_put else price * 100
                 juice_con = prem * 100
                 needed = max(1, int(np.ceil(goal / juice_con)))
-                if (needed * collateral_con) > acct: continue
+                if (needed * coll_con) > acct: continue
 
-                total_ret = ((juice_con / collateral_con) * 100) + (((strike - price) / price * 100) if not is_put and strike > price else 0)
+                total_ret = ((juice_con / coll_con) * 100) + (((strike - price) / price * 100) if not is_put and strike > price else 0)
 
                 res = {
                     "Ticker": disp_ticker, "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
                     "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "DTE": exp_dte,
                     "Delta": round(approx_delta, 2), "Juice/Con": round(juice_con, 2), "Contracts": needed,
                     "Total Juice": round(juice_con * needed, 2), "Total Return %": round(total_ret, 2),
-                    "Collateral": round(needed * collateral_con, 0), "HasE": has_e, "EDate": e_date
+                    "Collateral": round(needed * coll_con, 0), "HasE": has_e, "EDate": e_date
                 }
-                if not best or total_ret > best["Total Return %"]: best = row
+                if not best or total_ret > best["Total Return %"]: best = res
         return best
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY & RUNNER
+# 5. RUNNER & DISPLAY
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
-    with st.spinner("Processing..."):
+    with st.spinner("Processing live market data..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     st.session_state.results = [r for r in out if r]
@@ -165,7 +173,7 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
-        # Fixed SyntaxError string literal
+        # Fixed syntax error from image_326c39.png
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
@@ -179,7 +187,7 @@ if "results" in st.session_state:
             with c2:
                 g = r["Grade"][-1].lower()
                 e_html = f'<p class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</p>' if r['HasE'] else ""
-                # Fixed HTML raw code rendering
+                # Use unsafe_allow_html=True to fix raw code display from image_316d78.png
                 st.markdown(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -198,4 +206,4 @@ if "results" in st.session_state:
                 </div>
                 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings within 45 days.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings scheduled within 45 days. Trading involves risk.</div>""", unsafe_allow_html=True)
