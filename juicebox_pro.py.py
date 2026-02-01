@@ -80,18 +80,26 @@ def mid_price(row):
 with st.sidebar:
     st.header("🧃 Configuration")
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
+    
+    # --- PERCENTAGE & MONEY GOAL ---
+    c1, c2 = st.columns(2)
+    with c1:
+        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1)
+    with c2:
+        # Auto-calculate dollar goal based on percentage
+        calc_goal = acct * (goal_pct / 100)
+        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, calc_goal, step=10.0)
+    
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
     dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30))
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"])
     
-    # --- ADDED PUT TOGGLE ---
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
         put_mode = st.radio("Put Strategy Mode", ["OTM (Safe)", "ITM (Extrinsic Focus)"], horizontal=True)
     
     cushion_val = st.slider("Min Cushion %", 0, 50, 10) if strategy != "ATM Covered Call" else 0
-    st.info("💡 **Liquidity Filter Active:** OI 500+")
+    st.info(f"💡 **OI 500+ Active** | Targeting ${goal_amt:,.2f} ({goal_pct}%)")
 
     st.divider()
     text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
@@ -117,7 +125,6 @@ def scan(t):
             is_put = strategy == "Cash Secured Put"
             df = chain.puts if is_put else chain.calls
             
-            # Filter logic
             if strategy == "Deep ITM Covered Call":
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)]
             elif strategy == "Standard OTM Covered Call":
@@ -125,7 +132,7 @@ def scan(t):
             elif strategy == "Cash Secured Put":
                 if "OTM" in put_mode:
                     df = df[df["strike"] <= price * (1 - cushion_val / 100)]
-                else: # ITM Put mode
+                else:
                     df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
             for _, row in df.iterrows():
@@ -133,22 +140,19 @@ def scan(t):
                 open_int = row.get("openInterest", 0)
                 if open_int < 500 or total_prem <= 0: continue
 
-                # --- EXTRINSIC MATH ---
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
-                # Filter: Ensure time value exists
                 if intrinsic > 0 and extrinsic <= 0.05: continue
 
-                # Juice extraction
                 juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
                 coll_con = strike * 100 if is_put else price * 100
 
-                # Return Calc
                 upside = ((strike - price) / price * 100) if not is_put and strike > price else 0
                 total_ret = ((juice_con / coll_con) * 100) + upside
                 
-                needed = max(1, int(np.ceil(goal / (juice_con if juice_con > 0 else 1))))
+                # USE DYNAMIC GOAL AMOUNT
+                needed = max(1, int(np.ceil(goal_amt / (juice_con if juice_con > 0 else 1))))
                 if (needed * coll_con) > acct: continue
 
                 res = {
@@ -174,40 +178,4 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
-    with st.spinner("Analyzing premiums..."):
-        with ThreadPoolExecutor(max_workers=10) as ex:
-            out = list(ex.map(scan, tickers))
-    st.session_state.results = [r for r in out if r is not None]
-
-if "results" in st.session_state:
-    df = pd.DataFrame(st.session_state.results)
-    if not df.empty:
-        df = df.sort_values("Total Return %", ascending=False)
-        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
-        
-        if sel.selection.rows:
-            r = df.iloc[sel.selection.rows[0]]
-            st.divider()
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                tv_html = f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true,"symbol": "{r['Ticker']}","interval": "D","theme": "light","container_id": "tv"}});</script>"""
-                components.html(tv_html, height=510)
-            with c2:
-                g = r["Grade"][-1].lower()
-                card_html = f"""<div class="card">
-                <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
-                <div class="juice-val">{r['Total Return %']}%</div>
-                <hr>
-                <b>OI:</b> {r['OI']:,} | <b>Strike:</b> ${r['Strike']}<br>
-                <b>Breakdown (per contract):</b><br>
-                Extrinsic (Juice): ${r['Extrinsic']}<br>
-                Intrinsic: ${r['Intrinsic']}<br>
-                Total: ${r['Total Prem']}<br>
-                <hr>
-                <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']}<br>
-                <b>Collateral:</b> ${r['Collateral']:,.0f}
-                </div>"""
-                st.markdown(card_html, unsafe_allow_html=True)
-
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. OI 500+ filter enabled.</div>""", unsafe_allow_html=True)
+    with st.spinner(f"Scanning for {goal_pct}% yield opportunities..."):
