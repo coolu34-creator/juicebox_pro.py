@@ -59,7 +59,6 @@ with st.sidebar:
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
 
-    # Risk Warning
     if acct > 0 and goal > acct * 0.05:
         st.error("⚠️ Aggressive Goal: Target is >5% of account per week.")
     elif acct > 0 and goal > acct * 0.02:
@@ -90,7 +89,7 @@ def scan(t):
         if not tk.options: return None, (t, ["no_options"])
 
         best = None
-        for exp in tk.options[:2]: # Look at nearest 2 expirations
+        for exp in tk.options[:2]:
             chain = tk.option_chain(exp)
             is_put = strategy == "Cash Secured Put"
             df = chain.puts if is_put else chain.calls
@@ -104,7 +103,7 @@ def scan(t):
             elif strategy == "ATM Covered Call":
                 df["d"] = abs(df["strike"] - price)
                 pick = df.sort_values("d").iloc[0]
-            else: # Cash Secured Put
+            else:
                 df = df[df["strike"] <= price]
                 if df.empty: continue
                 df["d"] = abs(df["strike"] - price)
@@ -122,7 +121,7 @@ def scan(t):
                 juice = extrinsic * 100
                 collateral = price * 100
             
-            cushion = (price - strike) / price * 100 if not is_put else (price - strike) / price * 100
+            cushion = (price - strike) / price * 100
             if juice <= 0: continue
 
             contracts = max(1, int(np.ceil(goal / juice)))
@@ -145,26 +144,21 @@ def scan(t):
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-# INSTRUCTIONS EXPANDER
 with st.expander("📖 HOW TO USE THIS SCANNER", expanded=False):
     st.markdown("""
     ### 1. Set Your Goals
-    Enter your **Account Value** and **Weekly Goal** in the sidebar. The tool calculates how many contracts are required to hit your income target without over-leveraging your cash.
+    Enter your **Account Value** and **Weekly Goal** in the sidebar. The tool calculates how many contracts are required to hit your income target without over-leveraging.
     
-    ### 2. Understand the Strategies
-    * **Deep ITM (In-The-Money) Call:** High safety. You sell a call far below the current price. You keep the "Extrinsic" value as profit.
-    * **ATM (At-The-Money) Call:** Higher yield, but less protection if the stock drops.
-    * **Cash Secured Put:** Getting paid to commit to buying a stock at a specific price.
+    ### 2. Strategies
+    * **Deep ITM Call:** Defensive. Sell far below price; profit is the 'extrinsic' value.
+    * **ATM Call:** Aggressive. Higher yield, less protection.
+    * **Cash Secured Put:** Paid to wait to buy a stock at a discount.
     
-    ### 3. The 'Grade' System
-    The grade is based on **Cushion %** (how much the stock can drop before your profit is erased).
-    * 🟢 **A (12%+):** Very Conservative.
-    * 🟡 **B (7-12%):** Balanced.
-    * 🔴 **C (<7%):** Aggressive/Speculative.
+    ### 3. Safety Grades
+    * 🟢 **A (12%+ Cushion):** Very Conservative.
+    * 🟡 **B (7-12% Cushion):** Balanced.
+    * 🔴 **C (<7% Cushion):** Aggressive.
     """)
-    st.info("💡 **Pro Tip:** Select a result from the table to load its interactive technical chart.")
-
-[Image of Options Profit and Loss Diagram]
 
 if st.button("RUN SCAN ⚡", use_container_width=True):
     results, diags = [], {}
@@ -183,9 +177,8 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if df.empty:
-        st.warning("No qualifyng trades found for this budget/strategy.")
+        st.warning("No qualifying trades found for this budget/strategy.")
     else:
-        # Selection Table
         sel = st.dataframe(df, use_container_width=True, hide_index=True,
                             selection_mode="single-row", on_select="rerun")
 
@@ -208,23 +201,23 @@ if "results" in st.session_state:
                 """, height=510)
 
             with c2:
-                g_class = r["Grade"][-1].lower()
+                g_char = r["Grade"][-1].lower()
                 st.markdown(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h2 style="margin:0;">{r['Ticker']}</h2>
-                        <span class="grade-{g_class}">{r['Grade']}</span>
+                        <span class="grade-{g_char}">{r['Grade']}</span>
                     </div>
                     <p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Profit</p>
                     <div class="juice-val">${r['Total Juice']:,.2f}</div>
                     <hr>
                     <b>Target Strike:</b> ${r['Strike']}<br>
                     <b>Expiration:</b> {r['Expiration']}<br>
-                    <b>Contracts needed:</b> {r['Contracts']}<br>
-                    <b>Downside Cushion:</b> {r['Cushion %']}%<br>
-                    <b>Expected ROI:</b> {r['ROI %']}%<br>
-                    <b>Total Collateral:</b> ${r['Collateral']:,.0f}
-                    <p class="muted">Note: Calculations use Mid-Price. Collateral is based on 100 shares/contract or cash required for puts.</p>
+                    <b>Contracts:</b> {r['Contracts']}<br>
+                    <b>Cushion:</b> {r['Cushion %']}%<br>
+                    <b>ROI:</b> {r['ROI %']}%<br>
+                    <b>Collateral:</b> ${r['Collateral']:,.0f}
+                    <p class="muted">Note: Mid-price used for juice. Please verify bid/ask spread before trading.</p>
                 </div>
                 """, unsafe_allow_html=True)
 
