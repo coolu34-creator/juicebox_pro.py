@@ -12,7 +12,6 @@ import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import textwrap
 from datetime import datetime, time, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
@@ -43,23 +42,17 @@ st.markdown("""
 # -------------------------------------------------
 def get_market_status():
     """Checks if NYSE is currently open (9:30-4:00 ET Mon-Fri)."""
-    # Simple UTC-5 approximation for EST (Standard Time)
     now_utc = datetime.utcnow()
     now_et = now_utc - timedelta(hours=5) 
-    
-    # Check Weekday (0=Mon, 4=Fri)
     is_weekday = 0 <= now_et.weekday() <= 4
-    # Check Time
     current_time = now_et.time()
     market_open = time(9, 30)
     market_close = time(16, 0)
-    
     is_open = is_weekday and (market_open <= current_time <= market_close)
     return is_open, now_et
 
 @st.cache_data(ttl=300)
 def get_spy_condition():
-    """Fetches SPY price to gauge overall market sentiment."""
     try:
         spy = yf.Ticker("SPY")
         hist = spy.history(period="2d")
@@ -80,194 +73,4 @@ def get_earnings_info(t):
             e_date = calendar.iloc[0, 0] 
             if isinstance(e_date, datetime):
                 if e_date < (datetime.now() + timedelta(days=45)):
-                    return True, e_date.strftime('%Y-%m-%d')
-    except: pass
-    return False, None
-
-@st.cache_data(ttl=60)
-def get_live_price(t):
-    try:
-        tk = yf.Ticker(t)
-        fi = getattr(tk, "fast_info", None)
-        if fi and "last_price" in fi: return float(fi["last_price"])
-        hist = tk.history(period="1d", interval="1m")
-        if not hist.empty: return float(hist["Close"].iloc[-1])
-    except: pass
-    return None
-
-def mid_price(row):
-    bid, ask, lastp = row.get("bid"), row.get("ask"), row.get("lastPrice")
-    if pd.notna(bid) and pd.notna(ask) and ask > 0: return (bid + ask) / 2
-    return float(lastp) if pd.notna(lastp) else 0
-
-# -------------------------------------------------
-# 3. SIDEBAR
-# -------------------------------------------------
-with st.sidebar:
-    st.header("🧃 Configuration")
-    
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="sb_acct_v8")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="sb_goal_v8")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="sb_price_v8")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="sb_dte_v8")
-    
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="sb_strat_v8")
-    
-    # --- DYNAMIC SLIDERS ---
-    delta_val = (0.15, 0.45) 
-    if strategy == "Standard OTM Covered Call":
-        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="sb_delta_v8")
-    
-    cushion_val = 10 
-    if strategy == "Deep ITM Covered Call":
-        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="sb_cushion_v8")
-
-    # --- LEGEND ---
-    st.markdown("### 📚 Strategy Legend")
-    if strategy == "Standard OTM Covered Call":
-        st.info("**Standard OTM:** Targets growth + premium. Selects strikes ABOVE market price.")
-    elif strategy == "Deep ITM Covered Call":
-        st.success("**Deep ITM:** Safety Play. Juice is **Extrinsic Value** only.")
-    elif strategy == "ATM Covered Call":
-        st.warning("**ATM:** High premium. Picks strike closest to current price.")
-    else:
-        st.info("**Cash Secured Put:** Paid to wait. Buy stock at a discount.")
-
-    st.divider()
-    text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="sb_ticks_v8")
-    tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
-
-# -------------------------------------------------
-# 4. SCANNER LOGIC
-# -------------------------------------------------
-def scan(t):
-    try:
-        price = get_live_price(t)
-        if not price or not (price_range[0] <= price <= price_range[1]): return None
-        
-        has_e, e_date = get_earnings_info(t)
-        disp_ticker = f"{t} (E)" if has_e else t
-
-        tk = yf.Ticker(t)
-        if not tk.options: return None
-
-        today = datetime.now()
-        best = None
-        for exp in tk.options:
-            exp_dte = (datetime.strptime(exp, "%Y-%m-%d") - today).days
-            if not (dte_range[0] <= exp_dte <= dte_range[1]): 
-                if exp_dte > dte_range[1]: break
-                continue
-
-            chain = tk.option_chain(exp)
-            is_put = strategy == "Cash Secured Put"
-            df = chain.puts if is_put else chain.calls
-            if df.empty: continue
-
-            # --- STRATEGY LOGIC ---
-            if strategy == "Standard OTM Covered Call":
-                df = df[df["strike"] > price] 
-            elif strategy == "Deep ITM Covered Call":
-                df = df[df["strike"] <= price * (1 - cushion_val / 100)] 
-            elif strategy == "ATM Covered Call":
-                df["dist"] = abs(df["strike"] - price)
-                df = df.sort_values("dist").head(1)
-            elif strategy == "Cash Secured Put":
-                df = df[df["strike"] < price] 
-
-            for _, row in df.iterrows():
-                strike, prem = row["strike"], mid_price(row)
-                if prem <= 0: continue
-
-                # --- EXTRINSIC MATH ---
-                intrinsic = max(0, price - strike)
-                extrinsic = max(0, prem - intrinsic)
-
-                # --- DELTA FILTER ---
-                approx_delta = 1.0 - abs(strike - price) / price
-                if strategy == "Standard OTM Covered Call":
-                    if not (delta_val[0] <= approx_delta <= delta_val[1]): continue
-
-                coll_con = strike * 100 if is_put else price * 100
-                
-                if strategy == "Deep ITM Covered Call":
-                    juice_con = extrinsic * 100
-                else:
-                    juice_con = prem * 100
-
-                if juice_con <= 1: continue 
-
-                needed = max(1, int(np.ceil(goal / juice_con)))
-                if (needed * coll_con) > acct: continue
-
-                # Return Calc
-                if strategy == "Deep ITM Covered Call":
-                     total_ret = (juice_con / coll_con) * 100
-                else:
-                     upside = ((strike - price) / price * 100) if not is_put and strike > price else 0
-                     total_ret = ((juice_con / coll_con) * 100) + upside
-
-                res = {
-                    "Ticker": disp_ticker, "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
-                    "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "DTE": exp_dte,
-                    "Delta": round(approx_delta, 2), "Juice/Con": round(juice_con, 2), "Contracts": needed,
-                    "Total Juice": round(juice_con * needed, 2), "Total Return %": round(total_ret, 2),
-                    "Collateral": round(needed * coll_con, 0), "HasE": has_e, "EDate": e_date,
-                    "Extrinsic": round(extrinsic * 100, 2)
-                }
-                if not best or total_ret > best["Total Return %"]: best = res
-        return best
-    except: return None
-
-# -------------------------------------------------
-# 5. UI DISPLAY
-# -------------------------------------------------
-st.title("🧃 JuiceBox Pro")
-
-# --- MARKET BANNER ---
-is_open, et_time = get_market_status()
-spy_price, spy_pct = get_spy_condition()
-status_text = "MARKET OPEN 🟢" if is_open else "MARKET CLOSED 🔴"
-status_class = "market-open" if is_open else "market-closed"
-spy_color = "🟢" if spy_pct >= 0 else "🔴"
-
-st.markdown(f"""
-<div class="market-banner {status_class}">
-    {status_text} | Current Time (ET): {et_time.strftime('%I:%M %p')}<br>
-    SPY S&P 500: ${spy_price:.2f} ({spy_color} {spy_pct:+.2f}%)
-</div>
-""", unsafe_allow_html=True)
-
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="btn_run_v8"):
-    with st.spinner("Scanning market..."):
-        with ThreadPoolExecutor(max_workers=10) as ex:
-            out = list(ex.map(scan, tickers))
-    st.session_state.results = [r for r in out if r is not None]
-
-if "results" in st.session_state:
-    df = pd.DataFrame(st.session_state.results)
-    if not df.empty:
-        df = df.sort_values("Total Return %", ascending=False)
-        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
-        
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v8")
-        
-        if sel.selection.rows:
-            r = df.iloc[sel.selection.rows[0]]
-            st.divider()
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{ "autosize": true, "symbol": "{r['RawT']}", "interval": "D", "theme": "light", "container_id": "tv", "studies": ["BB@tv-basicstudies"] }});</script>""", height=510)
-            with c2:
-                g = r["Grade"][-1].lower()
-                e_html = f'<div class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</div>' if r['HasE'] else ""
-                ext_html = f'<div class="extrinsic-highlight">Time Value (Extrinsic): ${r["Extrinsic"]}</div><br>' if strategy == "Deep ITM Covered Call" else ""
-
-                card_html = f"""
-<div class="card">
-<div style="display:flex; justify-content:space-between; align-items:center;">
-<h2 style="margin:0;">{r['Ticker']}</h2>
-<span class="grade-{g}">{r['Grade']}</span>
-</div>
-{e_html}
-<p style="margin:0; font-
+                    return True, e_date
