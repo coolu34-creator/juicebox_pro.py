@@ -81,7 +81,6 @@ with st.sidebar:
     st.header("🧃 Configuration")
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct")
     
-    # --- GOAL TYPE SLIDE TOGGLE ---
     goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type")
     
     if goal_type == "Percentage (%)":
@@ -99,7 +98,14 @@ with st.sidebar:
     if strategy == "Cash Secured Put":
         put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode")
     
-    cushion_val = st.slider("Min Cushion %", 0, 50, 10, key="cfg_cushion") if strategy != "ATM Covered Call" else 0
+    # --- DYNAMIC CUSHION SLIDER (ONLY FOR ITM) ---
+    is_itm_call = strategy == "Deep ITM Covered Call"
+    is_itm_put = strategy == "Cash Secured Put" and put_mode == "ITM"
+    
+    cushion_val = 0
+    if is_itm_call or is_itm_put:
+        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion")
+
     st.info(f"💡 **OI 500+ Active** | Targeting: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
     st.divider()
@@ -132,7 +138,7 @@ def scan(t):
                 df = df[df["strike"] > price]
             elif strategy == "Cash Secured Put":
                 if put_mode == "OTM":
-                    df = df[df["strike"] <= price * (1 - cushion_val / 100)]
+                    df = df[df["strike"] <= price]
                 else: 
                     df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
@@ -177,9 +183,9 @@ st.title("🧃 JuiceBox Pro")
 with st.expander("🚀 How to Use JuiceBox Pro™"):
     st.markdown("""
     * **Set Your Foundation:** Enter your Account Value in the sidebar.
-    * **Define Your Goal:** Switch between **$** or **%** mode. The app calculates required contracts automatically.
+    * **Define Your Goal:** Switch between **$** or **%** mode.
     * **Choose Your "Juice" Type:** Select your strategy. Deep ITM focuses on Extrinsic time-value.
-    * **Run the Scan:** OI 500+ and Extrinsic calculations are applied to your watchlist.
+    * **Run the Scan:** OI 500+ and Extrinsic calculations are applied.
     * **Analyze the Results:** **🎯 indicates weekly goal met in one trade.**
     """)
 
@@ -211,7 +217,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn"):
-    with st.spinner(f"Scanning for {goal_amt:,.2f} weekly goal..."):
+    with st.spinner(f"Scanning for opportunities..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
