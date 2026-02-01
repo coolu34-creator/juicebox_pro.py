@@ -68,8 +68,7 @@ with st.sidebar:
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
     
-    # UPDATED DTE SLIDER TO 45 DAYS
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), help="Select the timeframe for option expirations.")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30))
     
     strategy = st.selectbox("Strategy", [
         "Standard OTM Covered Call", 
@@ -98,7 +97,6 @@ def scan(t):
         tk = yf.Ticker(t)
         if not tk.options: return None, (t, ["no_opt"])
 
-        # Filter Expirations by DTE Slider
         valid_exps = []
         today = datetime.now()
         for exp in tk.options:
@@ -171,10 +169,10 @@ st.title("🧃 JuiceBox Pro")
 with st.expander("📖 OPERATING DIRECTIONS", expanded=False):
     st.markdown("""
     <div class="guide-box">
-    <b>1. Capital & DTE:</b> Use the sidebar to set your budget and target expiration (now up to 45 days).<br>
-    <b>2. Real-Time Price:</b> Live market data is used to calculate exact upside and yield percentages.<br>
-    <b>3. Standard OTM:</b> Targets growth and premium by selecting strikes above the current market price.<br>
-    <b>4. Analysis:</b> Select a scan result to view the TradingView chart and collateral requirements.
+    <b>1. Set TImeframes:</b> Use the DTE slider to target 0-45 days.<br>
+    <b>2. Columns:</b> Juice/Con shows premium per single contract; Total Juice is your expected cash flow.<br>
+    <b>3. Standards:</b> OTM logic ensures you pick strikes with positive growth potential.<br>
+    <b>4. Proprietary:</b> Owned and operated by Bucforty LLC.
     </div>
     """, unsafe_allow_html=True)
 
@@ -189,7 +187,10 @@ if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
-        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Total Return %", "Yield %", "Upside %", "Total Juice"]
+        
+        # RESTORED Juice/Con COLUMN HERE
+        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Return %", "Yield %", "Total Juice"]
+        
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
@@ -199,7 +200,7 @@ if "results" in st.session_state:
                 components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv", "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]}});</script>""", height=510)
             with c2:
                 g = r["Grade"][-1].lower()
-                st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div><p style="margin:0; font-size:14px; color:#6b7280;">Potential Total Return</p><div class="juice-val">{r['Total Return %']}%</div><hr><b>Live Price:</b> ${r['Price']}<br><b>Strike:</b> ${r['Strike']} | <b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)<br><b>Yield:</b> {r['Yield %']}% | <b>Upside:</b> {r['Upside %']}%</div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div><p style="margin:0; font-size:14px; color:#6b7280;">Potential Total Return</p><div class="juice-val">{r['Total Return %']}%</div><hr><b>Live Price:</b> ${r['Price']}<br><b>Strike:</b> ${r['Strike']} | <b>Exp:</b> {r['Expiration']} ({r['DTE']} Days)<br><b>Juice/Con:</b> ${r['Juice/Con']}<br><b>Total Juice:</b> ${r['Total Juice']}</div>""", unsafe_allow_html=True)
 
 st.markdown("""
 <div class="disclaimer">
