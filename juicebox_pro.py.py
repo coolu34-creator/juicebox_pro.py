@@ -30,19 +30,17 @@ def get_price(t):
     try:
         tk = yf.Ticker(t)
         fi = getattr(tk, "fast_info", None)
-        if fi and fi.get("last_price"):
-            return float(fi["last_price"])
+        if fi and fi.get("last_price"): return float(fi["last_price"])
     except: pass
     try:
-        hist = yf.Ticker(t).history(period="5d")
+        hist = yf.Ticker(t).history(period="1d")
         if not hist.empty: return float(hist["Close"].iloc[-1])
     except: pass
     return None
 
 def mid_price(row):
     bid, ask, lastp = row.get("bid"), row.get("ask"), row.get("lastPrice")
-    if pd.notna(bid) and pd.notna(ask) and ask > 0:
-        return (bid + ask) / 2
+    if pd.notna(bid) and pd.notna(ask) and ask > 0: return (bid + ask) / 2
     return float(lastp) if pd.notna(lastp) else 0
 
 def grade(c):
@@ -58,24 +56,20 @@ with st.sidebar:
     
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500)
     goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10)
-
-    # NEW: Price Range Slider
+    
+    # PRICE RANGE SLIDER
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100))
 
-    strategy = st.selectbox(
-        "Strategy",
-        ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"]
-    )
-
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
     cushion_req = st.slider("Min ITM Cushion %", 0, 30, 10) if "Deep ITM" in strategy else 0
     show_diag = st.checkbox("Show Error Logs", value=False)
 
     st.divider()
     
-    # 200 Ticker List
-    default_tickers = "SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, SNAP, PFE, NIO, HOOD, RKT, BAC, KVUE, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, BITO, C, GM, DAL, UBER, MARA, RIOT, COIN, DKNG, LCID, PENT, AI, GME, AMC, BB, PATH, U, AFrm, COVA, SQ, SHOP, NU, RIVN, GRAB, SE, CCL, NCLH, RCL, SAVE, JBLU, UAL, LUV, MAR, HLT, MGM, WYNN, PENN, TLRY, CGC, CRON, ACB, MSOS, GRWG, CAN, HUT, HIVE, CLSK, BTBT, WULF, SDIG, IREN, CIFR, GREE, CORZ, BTDR, BITF, GCT, PDD, BABA, JD, LI, XPEV, BIDU, FUTU, TME, VIPS, IQ, EDU, TAL, GOTU, YALA, EM, EH, ATAT, ZK, KGEA, S, NET, CRWD, OKTA, ZS, DDOG, SNOW, MDB, TEAM, ASAN, MOND, SMAR, ESTC, SPLK, NTNX, BOX, DBX, DOCU, ZM, WORK, PINS, ETSY, EBAY, DASH, ROKU, W, CHWY, CVNA, OSTK, BYND, EXPE, BKNG, ABNB, LYFT, GRUB, CART, INST, KVYO, ARM, AVGO, MU, INTC, TXN, ADI, MCHP, ON, NXPI, QRVO, SWKS, TER, LRCX, AMAT, KLAC, ASML, TSM, GFS, WDC, STX, MP, ALB, SQM, LAC, LTHM, PLL, CHPT, BLNK, EVGO, BE, FCEL, RUN, NOVA, ENPH, SEDG, FSLR, CSIQ, JKS, DQ, PLD, AMT, CCI, EQIX, DLR, WY, PSA, EXR, CUBE, IRM, VICI, GLPI, STAG, EPR, AGNC, NLY, CMCSA, DIS, NFLX, PARA, WBD, FOXA, SIRI, FUBO, SPOT"
+    # YOUR 200 TICKER MASTER LIST
+    default_ticks = "SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, SNAP, PFE, NIO, HOOD, RKT, BAC, KVUE, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, BITO, C, GM, DAL, UBER, MARA, RIOT, COIN, DKNG, LCID, PENT, AI, GME, AMC, BB, PATH, U, AFrm, COVA, SQ, SHOP, NU, RIVN, GRAB, SE, CCL, NCLH, RCL, SAVE, JBLU, UAL, LUV, MAR, HLT, MGM, WYNN, PENN, TLRY, CGC, CRON, ACB, MSOS, GRWG, CAN, HUT, HIVE, CLSK, BTBT, WULF, SDIG, IREN, CIFR, GREE, CORZ, BTDR, BITF, GCT, PDD, BABA, JD, LI, XPEV, BIDU, FUTU, TME, VIPS, IQ, EDU, TAL, GOTU, YALA, EM, EH, ATAT, ZK, KGEA, S, NET, CRWD, OKTA, ZS, DDOG, SNOW, MDB, TEAM, ASAN, MOND, SMAR, ESTC, SPLK, NTNX, BOX, DBX, DOCU, ZM, WORK, PINS, ETSY, EBAY, DASH, ROKU, W, CHWY, CVNA, OSTK, BYND, EXPE, BKNG, ABNB, LYFT, GRUB, CART, INST, KVYO, ARM, AVGO, MU, INTC, TXN, ADI, MCHP, ON, NXPI, QRVO, SWKS, TER, LRCX, AMAT, KLAC, ASML, TSM, GFS, WDC, STX, MP, ALB, SQM, LAC, LTHM, PLL, CHPT, BLNK, EVGO, BE, FCEL, RUN, NOVA, ENPH, SEDG, FSLR, CSIQ, JKS, DQ, PLD, AMT, CCI, EQIX, DLR, WY, PSA, EXR, CUBE, IRM, VICI, GLPI, STAG, EPR, AGNC, NLY, CMCSA, DIS, NFLX, PARA, WBD, FOXA, SIRI, FUBO, SPOT, BOIL, UNG"
     
-    text = st.text_area("Ticker Watchlist", value=default_tickers, height=180)
+    text = st.text_area("Ticker Watchlist", value=default_ticks, height=180)
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -84,11 +78,7 @@ with st.sidebar:
 def scan(t):
     try:
         price = get_price(t)
-        if not price: return None, (t, ["no_price"])
-        
-        # Use slider values for filtering
-        if not (price_range[0] <= price <= price_range[1]): 
-            return None, (t, ["out_of_range"])
+        if not price or not (price_range[0] <= price <= price_range[1]): return None, (t, ["out_of_range"])
         
         tk = yf.Ticker(t)
         if not tk.options: return None, (t, ["no_options"])
@@ -118,14 +108,11 @@ def scan(t):
             if prem <= 0: continue
 
             if is_put:
-                juice = prem * 100
-                collateral = strike * 100
+                juice, collateral = prem * 100, strike * 100
                 cushion = (price - strike) / price * 100
             else:
-                intrinsic = max(price - strike, 0)
-                extrinsic = max(prem - intrinsic, 0)
-                juice = extrinsic * 100
-                collateral = price * 100
+                extrinsic = max(prem - max(price - strike, 0), 0)
+                juice, collateral = extrinsic * 100, price * 100
                 cushion = (price - strike) / price * 100
             
             if juice <= 0: continue
@@ -133,13 +120,7 @@ def scan(t):
             if contracts * collateral > acct: continue
 
             roi = (juice / collateral) * 100
-            row = {
-                "Ticker": t, "Grade": grade(cushion), "Price": round(price, 2),
-                "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2),
-                "Contracts": contracts, "Total Juice": round(juice * contracts, 2),
-                "Cushion %": round(cushion, 2), "ROI %": round(roi, 2),
-                "Collateral": round(contracts * collateral, 0)
-            }
+            row = {"Ticker": t, "Grade": grade(cushion), "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "Juice/Con": round(juice, 2), "Contracts": contracts, "Total Juice": round(juice * contracts, 2), "Cushion %": round(cushion, 2), "ROI %": round(roi, 2), "Collateral": round(contracts * collateral, 0)}
             if not best or roi > best["ROI %"]: best = row
         return (best, (t, [])) if best else (None, (t, ["no_match"]))
     except Exception as e: return None, (t, [str(e)])
@@ -151,7 +132,7 @@ st.title("🧃 JuiceBox Pro")
 
 if st.button("RUN SCAN ⚡", use_container_width=True):
     results, diags = [], {}
-    with st.spinner(f"Scanning {len(tickers)} tickers between ${price_range[0]} and ${price_range[1]}..."):
+    with st.spinner(f"Squeezing {len(tickers)} tickers..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     for r, (t, d) in out:
@@ -161,54 +142,20 @@ if st.button("RUN SCAN ⚡", use_container_width=True):
     st.session_state.diags = diags
 
 # -------------------------------------------------
-# 6. DISPLAY RESULTS
+# 6. DISPLAY
 # -------------------------------------------------
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
-    if df.empty:
-        st.warning("No trades found in this price range. Try expanding the slider.")
+    if df.empty: st.warning("No matches. Try expanding your price range or lowering your goal.")
     else:
         df = df.sort_values("ROI %", ascending=False)
-        sel = st.dataframe(df, use_container_width=True, hide_index=True,
-                            selection_mode="single-row", on_select="rerun")
-
+        sel = st.dataframe(df, use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                components.html(f"""
-                <div id="tv" style="height:500px"></div>
-                <script src="https://s3.tradingview.com/tv.js"></script>
-                <script>
-                new TradingView.widget({{
-                  "autosize": true, "symbol": "{r['Ticker']}", "interval": "D",
-                  "theme": "light", "style": "1", "container_id": "tv",
-                  "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]
-                }});
-                </script>
-                """, height=510)
+                components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv", "studies": ["BB@tv-basicstudies", "RSI@tv-basicstudies"]}});</script>""", height=510)
             with c2:
                 g_char = r["Grade"][-1].lower()
-                st.markdown(f"""
-                <div class="card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h2 style="margin:0;">{r['Ticker']}</h2>
-                        <span class="grade-{g_char}">{r['Grade']}</span>
-                    </div>
-                    <p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Weekly Juice</p>
-                    <div class="juice-val">${r['Total Juice']:,.2f}</div>
-                    <hr>
-                    <b>Current Price:</b> ${r['Price']}<br>
-                    <b>Target Strike:</b> ${r['Strike']}<br>
-                    <b>Expiration:</b> {r['Expiration']}<br>
-                    <b>Contracts:</b> {r['Contracts']}<br>
-                    <b>Downside Cushion:</b> {r['Cushion %']}%<br>
-                    <b>Expected ROI:</b> {r['ROI %']}%<br>
-                    <b>Collateral:</b> ${r['Collateral']:,.0f}
-                </div>
-                """, unsafe_allow_html=True)
-
-    if show_diag:
-        with st.expander("System Logs"):
-            st.write(st.session_state.diags)
+                st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><h2 style="margin:0;">{r['Ticker']}</h2><span class="grade-{g_char}">{r['Grade']}</span></div><p style="margin-bottom:0; font-size:14px; color:#6b7280;">Estimated Weekly Juice</p><div class="juice-val">${r['Total Juice']:,.2f}</div><hr><b>Price:</b> ${r['Price']}<br><b>Strike:</b> ${r['Strike']}<br><b>Exp:</b> {r['Expiration']}<br><b>Contracts:</b> {r['Contracts']}<br><b>Cushion:</b> {r['Cushion %']}%<br><b>ROI:</b> {r['ROI %']}%<br><b>Collateral:</b> ${r['Collateral']:,.0f}</div>""", unsafe_allow_html=True)
