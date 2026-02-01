@@ -6,10 +6,31 @@ from datetime import datetime
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-# 1. APP SETUP
+# -------------------------------------------------
+# 1. APP SETUP & BRANDING
+# -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
-# 2. MARKET SENTIMENT (Top Bar)
+st.markdown("""
+<style>
+    .main { background-color: #f8fafc; }
+    .sentiment-bar { 
+        background: #000000; color: white; padding: 15px; 
+        border-radius: 15px; margin-bottom: 20px; 
+        display: flex; flex-direction: column; align-items: center; gap: 8px;
+    }
+    .card { 
+        border: 1px solid #e2e8f0; border-radius: 15px; background: white; 
+        padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
+    }
+    .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin:0; }
+    .prem-val { color: #2563eb; font-weight: 700; font-size: 18px; margin:0; }
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------------------------------
+# 2. MARKET DATA UTILITIES
+# -------------------------------------------------
 def get_market_sentiment():
     try:
         data = yf.download(["^GSPC", "^VIX"], period="2d", interval="1d", progress=False)['Close']
@@ -20,22 +41,22 @@ def get_market_sentiment():
 
 spy_ch, v_vix, s_c = get_market_sentiment()
 
-# 3. SIDEBAR: GOALS & FILTERS
+# -------------------------------------------------
+# 3. SIDEBAR: GOALS & PRECISION FILTERS
+# -------------------------------------------------
 with st.sidebar:
     try:
         st.image("couple.png", use_container_width=True)
     except:
-        st.warning("Upload 'couple.png' to this folder to see your branding.")
+        st.info("Upload 'couple.png' to see your legacy branding.")
     
     st.subheader("🗓️ Weekly Account Engine")
     total_acc = st.number_input("Account Value ($)", value=10000, step=1000)
     
     st.divider()
-    # Share Price Range
+    # Precision Range & Safety
     price_range = st.slider("Share Price Range ($)", 0, 500, (10, 150))
     min_p, max_p = price_range
-    
-    # Safety & DTE
     user_cushion = st.slider("Min ITM Cushion %", 2, 25, 8) 
     max_dte = st.slider("Max DTE (Days)", 4, 15, 10)
     
@@ -47,7 +68,9 @@ with st.sidebar:
 
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM", "Standard OTM", "Cash Secured Put"])
 
+# -------------------------------------------------
 # 4. SCANNER LOGIC
+# -------------------------------------------------
 def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price, max_price):
     try:
         stock = yf.Ticker(t)
@@ -62,7 +85,6 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
                 df = df[df["openInterest"] >= 300]
                 if df.empty: continue
                 
-                # Strike selection based on cushion
                 if "ITM" in strategy_type:
                     match_df = df[df["strike"] < price * (1 - (cushion_limit / 100))]
                     if match_df.empty: continue
@@ -80,21 +102,59 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
                 return {
                     "Ticker": t, "Price": round(price, 2), "Strike": strike,
                     "Premium ($)": round(prem * 100, 2), "Juice ($)": round(juice * 100, 2), 
-                    "Cushion %": round(((price - basis) / price) * 100, 2), 
+                    "ROI %": round((juice/basis)*100, 2), "Cushion %": round(((price - basis) / price) * 100, 2), 
                     "DTE": dte, "Contracts": contracts, "Capital Req": round(price * 100 * contracts, 2)
                 }
     except: return None
 
-# 5. UI RESULTS
-st.markdown(f'<div style="background:#000; color:#fff; padding:15px; border-radius:15px; text-align:center;">'
-            f'<b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {v_vix:.2f}</div>', unsafe_allow_html=True)
+# -------------------------------------------------
+# 5. UI DISPLAY & INTERACTIVE CHART
+# -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {v_vix:.2f}</div>
+</div>
+""", unsafe_allow_html=True)
 
 if st.button("RUN GENERATIONAL SCAN ⚡", use_container_width=True):
     univ = ["SPY", "QQQ", "IWM", "AMD", "NVDA", "AAPL", "TSLA", "PLTR", "SOFI", "AFRM", "MARA", "RIOT", "F", "BAC"]
     with ThreadPoolExecutor(max_workers=15) as ex:
         results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, max_dte, min_p, max_p), univ) if r]
-    st.session_state.results = results
+    st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
-if "results" in st.session_state:
+if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    display_cols = ["Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
+    
+    # Table Selection Logic
+    sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.write(f"### {row['Ticker']} Technical Analysis")
+            # Interactive Chart Restored
+            components.html(f"""
+                <div id="tv-chart" style="height:400px;"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                    "autosize": true, "symbol": "{row['Ticker']}", 
+                    "interval": "D", "theme": "light", "style": "1", "container_id": "tv-chart"
+                }});
+                </script>
+            """, height=420)
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+                <b>Execution Plan</b><br>
+                <p class="prem-val">Collect: ${row['Premium ($)']} Total</p>
+                <p class="juice-val">Keep: ${row['Juice ($)']} Juice</p>
+                <hr>
+                <b>Strike:</b> ${row['Strike']}<br>
+                <b>Safety Cushion:</b> {row['Cushion %']}%<br>
+                <b>Required Capital:</b> ${row['Capital Req']:,}
+            </div>
+            """, unsafe_allow_html=True)
