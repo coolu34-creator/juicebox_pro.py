@@ -12,7 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
-# High-quality static icon to prevent broken images
+# Persistent Trade Log for tracking wealth over time
+if 'wealth_log' not in st.session_state:
+    st.session_state.wealth_log = []
+
+# High-quality static icon
 LOGO_URL = "https://img.icons8.com/fluency/150/family-save.png"
 
 st.markdown("""
@@ -31,7 +35,6 @@ st.markdown("""
         padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); margin-bottom: 15px; 
     }
     .juice-val { color: #16a34a; font-weight: 800; font-size: 26px; margin:0; }
-    .cap-val { color: #ef4444; font-weight: 700; font-size: 18px; margin:0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -48,50 +51,40 @@ def get_market_sentiment():
         return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# CRITICAL FIX: Variables defined BEFORE the UI
 spy_ch, v_vix, s_c = get_market_sentiment()
 status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
 
 # -------------------------------------------------
-# 3. SIDEBAR: WEEKLY GOAL ENGINE
+# 3. SIDEBAR: ACCOUNT & CUSTOM CUSHION
 # -------------------------------------------------
-TICKER_MAP = {
-    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITX", "FAS", "SPXL", "SQQQ", "UVXY"],
-    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
-    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
-    "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
-    "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
-    "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
-}
-
 with st.sidebar:
     st.image(LOGO_URL, width=100)
     st.subheader("🗓️ Weekly Account Engine")
     total_account = st.number_input("Account Value ($)", value=10000, step=1000)
-    risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
     
+    # MANUAL CUSHION SELECTOR
+    st.divider()
+    st.subheader("🛡️ Safety Settings")
+    user_cushion = st.slider("Min ITM Cushion %", 2, 20, 8) 
+    min_oi = st.number_input("Min Open Interest", value=500)
+    
+    st.divider()
+    risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
     yield_map = {"Conservative": 0.0025, "Middle Road": 0.006, "Aggressive": 0.0125}
     weekly_goal = total_account * yield_map[risk_mode]
     st.metric("Weekly Income Goal", f"${weekly_goal:,.2f}")
 
     st.divider()
-    all_sectors = list(TICKER_MAP.keys())
-    selected_sectors = st.multiselect("Sectors", options=all_sectors, default=all_sectors)
-    
-    st.divider()
-    min_oi = st.number_input("Min Open Interest", value=500)
-    max_price = st.slider("Max Price ($)", 10, 500, 100)
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
 # 4. SCANNER ENGINE (Fixes KeyError)
 # -------------------------------------------------
-def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
+def scan_ticker(t, strategy_type, week_goal, cushion_limit, oi_limit):
     try:
         stock = yf.Ticker(t)
-        info = stock.info
-        price = info.get('currentPrice') or info.get('regularMarketPrice')
-        if not price or price > max_p: return None
+        price = stock.fast_info['last_price']
+        if not price: return None
 
         for exp in stock.options[:2]:
             dte = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
@@ -101,8 +94,9 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
                 df = df[df["openInterest"] >= oi_limit]
                 if df.empty: continue
                 
+                # Apply user-defined cushion for ITM
                 if strategy_type == "Deep ITM Covered Call":
-                    match_df = df[df["strike"] < price * 0.92]
+                    match_df = df[df["strike"] < price * (1 - (cushion_limit / 100))]
                     if match_df.empty: continue
                     match = match_df.sort_values("strike", ascending=False).iloc[0]
                 elif strategy_type == "ATM (At-the-Money)":
@@ -113,21 +107,20 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
                 prem = float(match["lastPrice"])
                 intrinsic = max(0, price - float(match["strike"])) if float(match["strike"]) < price else 0
                 juice = (prem - intrinsic)
-                cushion_price = price - prem
+                basis = price - prem
                 
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
                 capital_req = (price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
 
-                # KEYS MUST MATCH display_cols EXACTLY
                 return {
-                    "Ticker": t, "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/cushion_price)*100, 2),
-                    "Cushion Price ($)": round(cushion_price, 2), "Cushion %": round(((price - cushion_price) / price) * 100, 2),
+                    "Ticker": t, "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/basis)*100, 2),
+                    "Cushion %": round(((price - basis) / price) * 100, 2), "Strike": float(match["strike"]),
                     "Contracts": contracts, "Capital Req ($)": round(capital_req, 2), "OI": int(match["openInterest"])
                 }
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY & CHART (Fixes SyntaxError)
+# 5. UI DISPLAY & WEALTH TRACKER
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -136,19 +129,15 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
-    univ = []
-    for s in selected_sectors: univ.extend(TICKER_MAP[s])
-    with ThreadPoolExecutor(max_workers=25) as ex:
-        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
+if st.button("RUN GENERATIONAL SCAN ⚡", use_container_width=True):
+    univ = ["SPY", "QQQ", "IWM", "AMD", "NVDA", "AAPL", "TSLA", "PLTR", "SOFI", "AFRM", "MARA", "RIOT", "F", "BAC"]
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, min_oi), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    
-    # Strictly aligned column list
     display_cols = ["Ticker", "Juice ($)", "ROI %", "Cushion %", "Contracts", "Capital Req ($)"]
-    
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if sel.selection.rows:
@@ -156,26 +145,37 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            # Triple quotes fix unterminated f-string literal
             components.html(f"""
                 <div id="tv-chart" style="height:400px;"></div>
                 <script src="https://s3.tradingview.com/tv.js"></script>
-                <script>
-                new TradingView.widget({{
-                    "autosize": true, "symbol": "{row['Ticker']}", 
-                    "interval": "D", "theme": "light", "style": "1", "container_id": "tv-chart"
-                }});
-                </script>
+                <script>new TradingView.widget({{"autosize": true, "symbol": "{row['Ticker']}", "interval": "D", "theme": "light", "style": "1", "container_id": "tv-chart"}});</script>
             """, height=420)
         with c2:
             st.markdown(f"""
             <div class="card">
-                <h3>{row['Ticker']} Safety Check</h3>
+                <h3>{row['Ticker']} Log</h3>
                 <p class="juice-val">${row['Juice ($)']} Juice</p>
-                <p style="color:#2563eb; font-weight:700;">Break-even: ${row['Cushion Price ($)']}</p>
+                <p><b>Strike:</b> ${row['Strike']}</p>
                 <hr>
-                <b>Weekly Contracts:</b> {row['Contracts']}<br>
-                <b>Budget Required:</b> ${row['Capital Req ($)']:,}<br>
-                <b>Safety Cushion:</b> {row['Cushion %']}%
+                <b>Budget:</b> ${row['Capital Req ($)']:,}<br>
+                <b>Safety:</b> {row['Cushion %']}%
             </div>
             """, unsafe_allow_html=True)
+            if st.button("📈 LOG THIS TRADE"):
+                st.session_state.wealth_log.append({
+                    "Date": datetime.now().strftime("%Y-%m-%d"),
+                    "Ticker": row['Ticker'],
+                    "Juice Earned": row['Juice ($)'] * row['Contracts']
+                })
+                st.toast(f"Trade Logged! Wealth Building in progress.")
+
+# -------------------------------------------------
+# 6. GENERATIONAL WEALTH LOG
+# -------------------------------------------------
+if st.session_state.wealth_log:
+    st.divider()
+    st.subheader("📜 Your Generational Wealth Log")
+    log_df = pd.DataFrame(st.session_state.wealth_log)
+    st.table(log_df)
+    total_harvest = log_df["Juice Earned"].sum()
+    st.success(f"Total Wealth Harvested to Date: **${total_harvest:,.2f}**")
