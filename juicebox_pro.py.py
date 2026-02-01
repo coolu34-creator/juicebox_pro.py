@@ -5,20 +5,15 @@ import pandas as pd
 from datetime import datetime, time
 import numpy as np
 import pytz
-import base64
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
-# 1. PERMANENT IMAGE EMBEDDING (Fixes Broken Pic)
-# -------------------------------------------------
-# This is a Base64 placeholder. For your specific cartoon, 
-# you can replace this string or keep this high-quality legacy icon.
-LOGO_IMAGE = "https://img.icons8.com/fluency/150/family-save.png" 
-
-# -------------------------------------------------
-# 2. APP SETUP & BRANDING
+# 1. APP SETUP & BRANDING
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
+
+# Static reliable icon for sidebar branding
+LOGO_URL = "https://img.icons8.com/fluency/150/family-save.png"
 
 st.markdown("""
 <style>
@@ -41,7 +36,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 3. MARKET DATA UTILITIES (Fixes NameError)
+# 2. MARKET DATA UTILITIES (Fixes NameError)
 # -------------------------------------------------
 def get_market_sentiment():
     try:
@@ -53,27 +48,25 @@ def get_market_sentiment():
         return spy_ch, vix_val, ("#22c55e" if spy_ch >= 0 else "#ef4444")
     except: return 0.0, 0.0, "#fff"
 
-# CRITICAL FIX: Define these variables BEFORE the UI renders
+# CRITICAL FIX: Variables must exist before the UI tries to render them
 spy_ch, v_vix, s_c = get_market_sentiment()
 status_text, status_class = ("Market Open", "status-open") if 9 <= datetime.now().hour < 16 else ("Market Closed", "status-closed")
 
 # -------------------------------------------------
-# 4. SIDEBAR: ACCOUNT & SECTOR FILTERS
+# 3. SIDEBAR: WEEKLY GOAL ENGINE
 # -------------------------------------------------
 TICKER_MAP = {
-    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITO", "FAS", "SPXL", "SQQQ", "UVXY"],
+    "Leveraged (3x/2x)": ["SOXL", "TQQQ", "TNA", "BITX", "FAS", "SPXL", "SQQQ", "UVXY"],
     "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "VOO", "SCHD", "ARKK"],
-    "Tech & Semi": ["AMD", "NVDA", "AAPL", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
+    "Tech & Semi": ["AMD", "INTC", "MU", "PLTR", "SOFI", "HOOD", "AFRM", "UPST", "ROKU", "NET", "AI", "GME"],
     "Finance": ["BAC", "WFC", "C", "PNC", "COF", "NU", "SQ", "PYPL", "COIN"],
     "Energy & Materials": ["OXY", "DVN", "HAL", "SLB", "FCX", "CLF", "NEM", "GOLD"],
     "Retail & Misc": ["F", "GM", "CL", "PFE", "BMY", "NKE", "SBUX", "TGT", "DIS", "WBD", "MARA", "RIOT", "AMC"]
 }
 
 with st.sidebar:
-    st.image(LOGO_IMAGE, width=120)
-    st.title("JuiceBox Pro")
+    st.image(LOGO_URL, width=100)
     st.subheader("🗓️ Weekly Account Engine")
-    
     total_account = st.number_input("Account Value ($)", value=10000, step=1000)
     risk_mode = st.select_slider("Risk Profile", options=["Conservative", "Middle Road", "Aggressive"], value="Conservative")
     
@@ -91,12 +84,13 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM (At-the-Money)", "Standard OTM Covered Call", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 5. SCANNER ENGINE (Fixes KeyError)
+# 4. SCANNER ENGINE (Fixes KeyError)
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
     try:
         stock = yf.Ticker(t)
-        price = stock.fast_info['last_price']
+        info = stock.info
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not price or price > max_p: return None
 
         for exp in stock.options[:2]:
@@ -121,9 +115,69 @@ def scan_ticker(t, strategy_type, week_goal, max_p, oi_limit):
                 juice = (prem - intrinsic)
                 basis = price - prem
                 
+                # Calculation of Contracts and Capital
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
                 capital_req = (price * 100) * contracts if strategy_type != "Cash Secured Put" else (float(match["strike"]) * 100) * contracts
 
-                # These keys MUST match the display_cols below exactly
+                # These dictionary keys MUST match display_cols exactly below
                 return {
-                    "Ticker": t, "Juice ($)": round(juice * 100, 2), "ROI
+                    "Ticker": t, "Juice ($)": round(juice * 100, 2), "ROI %": round((juice/basis)*100, 2),
+                    "Cushion %": round(((price - basis) / price) * 100, 2), 
+                    "Contracts": contracts, "Capital Req ($)": round(capital_req, 2),
+                    "OI": int(match["openInterest"])
+                }
+    except: return None
+
+# -------------------------------------------------
+# 5. UI & CHART (Fixes SyntaxError)
+# -------------------------------------------------
+st.markdown(f"""
+<div class="sentiment-bar">
+    <span class="status-tag {status_class}">{status_text}</span>
+    <div><b>S&P 500:</b> <span style="color:{s_c}">{spy_ch:+.2f}%</span> | <b>VIX:</b> {v_vix:.2f}</div>
+</div>
+""", unsafe_allow_html=True)
+
+if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
+    univ = []
+    for s in selected_sectors: univ.extend(TICKER_MAP[s])
+    with ThreadPoolExecutor(max_workers=25) as ex:
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, max_price, min_oi), list(set(univ))) if r]
+    st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
+
+if "results" in st.session_state and st.session_state.results:
+    df = pd.DataFrame(st.session_state.results)
+    
+    # Fix: Matching exactly with Step 4 return keys
+    display_cols = ["Ticker", "Juice ($)", "ROI %", "Cushion %", "Contracts", "Capital Req ($)"]
+    
+    sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            # Fix: Using triple quotes to safely embed JS without unterminated string errors
+            components.html(f"""
+                <div id="tv-chart" style="height:400px;"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                    "autosize": true, "symbol": "{row['Ticker']}", 
+                    "interval": "D", "theme": "light", "style": "1", "container_id": "tv-chart"
+                }});
+                </script>
+            """, height=420)
+        with c2:
+            st.markdown(f"""
+            <div class="card">
+                <h3>{row['Ticker']} Details</h3>
+                <p class="juice-val">${row['Juice ($)']} Juice</p>
+                <p class="cap-val">Required: ${row['Capital Req ($)']:,}</p>
+                <hr>
+                <b>Weekly Contracts:</b> {row['Contracts']}<br>
+                <b>Safety Cushion:</b> {row['Cushion %']}%<br>
+                <b>Liquidity:</b> {row['OI']} OI
+            </div>
+            """, unsafe_allow_html=True)
