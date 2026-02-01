@@ -28,7 +28,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. MARKET DATA UTILITIES (Fixes NameError)
+# 2. MARKET DATA UTILITIES
 # -------------------------------------------------
 def get_market_sentiment():
     try:
@@ -41,22 +41,31 @@ def get_market_sentiment():
 spy_ch, v_vix, s_c = get_market_sentiment()
 
 # -------------------------------------------------
-# 3. SIDEBAR: ACCOUNT & PRECISION RANGE
+# 3. SIDEBAR: SECTORS & PRECISION FILTERS
 # -------------------------------------------------
+TICKER_MAP = {
+    "Market ETFs": ["SPY", "QQQ", "IWM", "DIA", "SCHD", "ARKK"],
+    "Tech & Semi": ["AMD", "NVDA", "AAPL", "MSFT", "PLTR", "SOFI", "AFRM", "AI"],
+    "Leveraged": ["SOXL", "TQQQ", "BITX", "FAS", "SQQQ", "UVXY"],
+    "Finance & Bank": ["BAC", "WFC", "C", "GS", "JPM", "COF", "PYPL", "SQ"],
+    "Energy & Retail": ["OXY", "DVN", "XLE", "F", "TSLA", "MARA", "RIOT", "AMC"]
+}
+
 with st.sidebar:
-    try:
-        st.image("couple.png", use_container_width=True)
-    except:
-        st.warning("Upload 'couple.png' to this folder to see your branding.")
+    try: st.image("couple.png", use_container_width=True)
+    except: st.info("Generational Wealth Mode")
     
     st.subheader("🗓️ Weekly Account Engine")
     total_acc = st.number_input("Account Value ($)", value=10000, step=1000)
     
     st.divider()
-    # Share Price Range
+    # SECTOR FILTER
+    all_sectors = list(TICKER_MAP.keys())
+    selected_sectors = st.multiselect("Sectors", options=all_sectors, default=all_sectors)
+    
+    # Range & Safety
     price_range = st.slider("Share Price Range ($)", 0, 500, (10, 150))
     min_p, max_p = price_range
-    
     user_cushion = st.slider("Min ITM Cushion %", 2, 25, 8) 
     max_dte = st.slider("Max DTE (Days)", 4, 15, 10)
     
@@ -69,7 +78,7 @@ with st.sidebar:
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM", "Standard OTM", "Cash Secured Put"])
 
 # -------------------------------------------------
-# 4. SCANNER ENGINE (Fixes KeyError)
+# 4. SCANNER ENGINE
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price, max_price):
     try:
@@ -85,7 +94,6 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
                 df = df[df["openInterest"] >= 300]
                 if df.empty: continue
                 
-                # Strike selection based on cushion
                 if "ITM" in strategy_type:
                     match_df = df[df["strike"] < price * (1 - (cushion_limit / 100))]
                     if match_df.empty: continue
@@ -96,12 +104,10 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
 
                 prem = float(match["lastPrice"])
                 strike = float(match["strike"])
-                # Actual Profit calculation
                 juice = (prem - max(0, price - strike)) if strike < price else prem
                 basis = price - prem
                 contracts = int(np.ceil(week_goal / (juice * 100))) if juice > 0 else 0
 
-                # Return dictionary keys MUST match display_cols below
                 return {
                     "Ticker": t, "Price": round(price, 2), "Strike": strike,
                     "Premium ($)": round(prem * 100, 2), "Juice ($)": round(juice * 100, 2), 
@@ -111,7 +117,7 @@ def scan_ticker(t, strategy_type, week_goal, cushion_limit, dte_limit, min_price
     except: return None
 
 # -------------------------------------------------
-# 5. UI DISPLAY & CHART (Fixes SyntaxError)
+# 5. UI DISPLAY & RESULTS
 # -------------------------------------------------
 st.markdown(f"""
 <div class="sentiment-bar">
@@ -119,15 +125,15 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("RUN GENERATIONAL SCAN ⚡", use_container_width=True):
-    univ = ["SPY", "QQQ", "IWM", "AMD", "NVDA", "AAPL", "TSLA", "PLTR", "SOFI", "AFRM", "MARA", "RIOT", "F", "BAC"]
+if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
+    univ = []
+    for s in selected_sectors: univ.extend(TICKER_MAP[s])
     with ThreadPoolExecutor(max_workers=15) as ex:
-        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, max_dte, min_p, max_p), univ) if r]
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, max_dte, min_p, max_p), list(set(univ))) if r]
     st.session_state.results = sorted(results, key=lambda x: x['ROI %'], reverse=True)
 
 if "results" in st.session_state and st.session_state.results:
     df = pd.DataFrame(st.session_state.results)
-    # Strictly aligned display columns
     display_cols = ["Ticker", "Price", "Strike", "Premium ($)", "Juice ($)", "ROI %", "Cushion %", "DTE", "Contracts"]
     
     sel = st.dataframe(df[display_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
@@ -137,8 +143,6 @@ if "results" in st.session_state and st.session_state.results:
         st.divider()
         c1, c2 = st.columns([2, 1])
         with c1:
-            st.write(f"### {row['Ticker']} Technical Analysis")
-            # Interactive Chart (Fixes SyntaxError)
             components.html(f"""
                 <div id="tv-chart" style="height:400px;"></div>
                 <script src="https://s3.tradingview.com/tv.js"></script>
@@ -152,12 +156,12 @@ if "results" in st.session_state and st.session_state.results:
         with c2:
             st.markdown(f"""
             <div class="card">
-                <b>Execution Plan</b><br>
-                <p style="color:#2563eb; font-weight:700;">Collect: ${row['Premium ($)']} Total</p>
-                <p class="juice-val">Keep: ${row['Juice ($)']} Juice</p>
+                <b>{row['Ticker']} Summary</b><br>
+                <p style="color:#2563eb; font-weight:700;">Premium: ${row['Premium ($)']}</p>
+                <p class="juice-val">Juice: ${row['Juice ($)']}</p>
                 <hr>
                 <b>Strike:</b> ${row['Strike']}<br>
-                <b>Time Frame:</b> {row['DTE']} Days<br>
-                <b>Budget Req:</b> ${row['Capital Req']:,}
+                <b>Cushion:</b> {row['Cushion %']}%<br>
+                <b>Time:</b> {row['DTE']} Days
             </div>
             """, unsafe_allow_html=True)
