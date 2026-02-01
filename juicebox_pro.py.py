@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
-# CSS styles used for rendering custom cards and grades
 st.markdown("""
 <style>
     .grade-a { background:#22c55e;color:white;padding:4px 10px;border-radius:18px;font-weight:700;}
@@ -45,7 +44,6 @@ def get_earnings_info(t):
         if calendar is not None and not calendar.empty:
             e_date = calendar.iloc[0, 0] 
             if isinstance(e_date, datetime):
-                # Flags earnings if within the 45-day window
                 if e_date < (datetime.now() + timedelta(days=45)):
                     return True, e_date.strftime('%Y-%m-%d')
     except: pass
@@ -68,26 +66,26 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR (FIXED: Unique Keys to prevent DuplicateElementId)
+# 3. SIDEBAR & DYNAMIC SLIDERS
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    # Added unique keys to solve the crash shown in image_31e1b9.png
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="main_acct_input")
-    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="main_goal_input")
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="price_slider")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="dte_slider")
-    delta_filter = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="delta_slider")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="buc_acct")
+    goal = st.number_input("Weekly Goal ($)", 10, 50000, 150, step=10, key="buc_goal")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="buc_price")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="buc_dte")
     
-    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="strat_select")
+    strategy = st.selectbox("Strategy", ["Standard OTM Covered Call", "Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="buc_strat")
     
-    st.markdown("### 📚 Strategy Legend")
+    # DYNAMIC SLIDERS: Only show Delta for Standard Strategy
+    delta_val = (0.15, 0.45)
     if strategy == "Standard OTM Covered Call":
-        st.info("Targets growth + premium. Selects strikes above market price.")
-    elif strategy == "Deep ITM Covered Call":
-        st.success("Maximizes safety. Targets strikes below current price.")
-    else:
-        st.info("Strategy logic provided by Bucforty LLC.")
+        delta_val = st.slider("Delta Filter (Probability)", 0.10, 0.90, (0.15, 0.45), key="buc_delta")
+    
+    # DYNAMIC SLIDERS: Only show Cushion for ITM Strategy
+    cushion_val = 10
+    if strategy == "Deep ITM Covered Call":
+        cushion_val = st.slider("Min ITM Cushion %", 0, 30, 10, key="buc_cushion")
 
     st.divider()
     text = st.text_area("Ticker Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150)
@@ -101,8 +99,8 @@ def scan(t):
         price = get_live_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None
         
-        has_earnings, earn_date = get_earnings_info(t)
-        display_ticker = f"{t} (E)" if has_earnings else t
+        has_e, e_date = get_earnings_info(t)
+        disp_ticker = f"{t} (E)" if has_e else t
 
         tk = yf.Ticker(t)
         if not tk.options: return None
@@ -120,19 +118,20 @@ def scan(t):
             df = chain.puts if is_put else chain.calls
             if df.empty: continue
 
-            # Strategy Selection Logic
+            # Strategy Selection
             if strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
             elif strategy == "Deep ITM Covered Call":
-                df = df[df["strike"] <= price * 0.9]
+                df = df[df["strike"] <= price * (1 - cushion_val / 100)]
 
             for _, row in df.iterrows():
                 strike, prem = row["strike"], mid_price(row)
                 if prem <= 0: continue
 
-                # Delta approximation
+                # Delta Prob check (only for standard)
                 approx_delta = 1.0 - abs(strike - price) / price
-                if not (delta_filter[0] <= approx_delta <= delta_filter[1]): continue
+                if strategy == "Standard OTM Covered Call":
+                    if not (delta_val[0] <= approx_delta <= delta_val[1]): continue
 
                 collateral_con = strike * 100 if is_put else price * 100
                 juice_con = prem * 100
@@ -142,23 +141,23 @@ def scan(t):
                 total_ret = ((juice_con / collateral_con) * 100) + (((strike - price) / price * 100) if not is_put and strike > price else 0)
 
                 res = {
-                    "Ticker": display_ticker, "RawTicker": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
+                    "Ticker": disp_ticker, "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
                     "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "DTE": exp_dte,
                     "Delta": round(approx_delta, 2), "Juice/Con": round(juice_con, 2), "Contracts": needed,
                     "Total Juice": round(juice_con * needed, 2), "Total Return %": round(total_ret, 2),
-                    "Collateral": round(needed * collateral_con, 0), "HasE": has_earnings, "EDate": earn_date
+                    "Collateral": round(needed * collateral_con, 0), "HasE": has_e, "EDate": e_date
                 }
                 if not best or total_ret > best["Total Return %"]: best = res
         return best
     except: return None
 
 # -------------------------------------------------
-# 5. SCANNER RUNNER & DISPLAY
+# 5. UI DISPLAY & RUNNER
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
-    with st.spinner("Processing real-time option chains..."):
+    with st.spinner("Processing..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
     st.session_state.results = [r for r in out if r]
@@ -166,9 +165,8 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True):
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
-        # FIXED: Line 185 syntax error from image_326c39.png resolved here
         df = df.sort_values("Total Return %", ascending=False)
-        cols = ["Ticker", "Grade", "Delta", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
+        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "DTE", "Juice/Con", "Total Juice", "Total Return %"]
         sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun")
         
         if sel.selection.rows:
@@ -176,11 +174,11 @@ if "results" in st.session_state:
             st.divider()
             c1, c2 = st.columns([2, 1])
             with c1:
-                components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['RawTicker']}", "interval": "D", "theme": "light", "container_id": "tv", "studies": ["BB@tv-basicstudies"]}});</script>""", height=510)
+                components.html(f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['RawT']}", "interval": "D", "theme": "light", "container_id": "tv", "studies": ["BB@tv-basicstudies"]}});</script>""", height=510)
             with c2:
                 g = r["Grade"][-1].lower()
                 e_html = f'<p class="earnings-alert">⚠️ EARNINGS: {r["EDate"]}</p>' if r['HasE'] else ""
-                # FIXED: Raw HTML rendering issue from image_316d78.png resolved by wrapping in unsafe_allow_html=True
+                # FIXED: Rendering using unsafe_allow_html=True to fix image_316d78.png
                 st.markdown(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -199,4 +197,4 @@ if "results" in st.session_state:
                 </div>
                 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings reports within 45 days. Options involve risk.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Tickers with <b>(E)</b> have earnings within 45 days.</div>""", unsafe_allow_html=True)
