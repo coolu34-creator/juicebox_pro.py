@@ -7,55 +7,49 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
 # -------------------------------------------------
-# 1. APP SETUP
+# 1. APP SETUP & STYLING
 # -------------------------------------------------
 st.set_page_config(page_title="JuiceBox Pro", page_icon="🧃", layout="wide")
 
-if 'wealth_history' not in st.session_state:
-    st.session_state.wealth_history = pd.DataFrame(columns=[
-        "Date", "Ticker", "Grade", "Juice ($)", "Contracts", "Total Juice", "Cushion %"
-    ])
+# Custom CSS for Grading Bubbles and Cards
+st.markdown("""
+<style>
+    .grade-a { background-color: #22c55e; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
+    .grade-b { background-color: #eab308; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
+    .grade-c { background-color: #ef4444; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
+    .card { border: 1px solid #e2e8f0; border-radius: 15px; padding: 20px; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .juice-val { color: #16a34a; font-size: 28px; font-weight: 800; margin: 0; }
+</style>
+""", unsafe_allow_html=True)
 
 # -------------------------------------------------
 # 2. SIDEBAR: GOALS & COLLATERAL GUARD
 # -------------------------------------------------
 with st.sidebar:
-    try: st.image("couple.png", use_container_width=True)
-    except: st.info("Generational Wealth Mode")
+    st.header("🧃 Juice Settings")
+    total_acc = st.number_input("Account Value ($)", value=10000)
+    weekly_goal = st.number_input("Weekly Goal ($)", value=150)
     
-    st.subheader("🗓️ Wealth Engine")
-    total_acc = st.number_input("Total Account Value ($)", value=10000, step=1000)
+    # Collateral Guard
+    max_safe = total_acc * 0.03
+    if weekly_goal > max_safe:
+        st.warning(f"⚠️ High Risk: Goal exceeds 3% of collateral (${max_safe:,.0f}).")
     
-    # MANUAL WEEKLY GOAL INPUT
-    weekly_goal = st.number_input("Weekly Income Goal ($)", value=100, step=50)
-    
-    # COLLATERAL GUARD LOGIC
-    # Standard ITM strategies usually require 100% collateral (Cash or Stock)
-    # We estimate a safe 'Yield' is 0.5% - 2% per week. 
-    max_safe_goal = total_acc * 0.03 # 3% is a very aggressive ceiling
-    
-    is_overleveraged = False
-    if weekly_goal > max_safe_goal:
-        st.error(f"⚠️ **GOAL TOO HIGH**")
-        st.warning(f"Based on your ${total_acc:,.0f} account, a ${weekly_goal} goal is unrealistic. You don't have enough collateral to back these trades safely.")
-        is_overleveraged = True
-    else:
-        st.success("✅ Goal is within collateral limits.")
-
     st.divider()
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "ATM Covered Call", "Cash Secured Put"])
-    user_cushion = st.slider("Min ITM Cushion %", 2, 25, 10) if "Deep ITM" in strategy else 0
-    selected_sectors = st.multiselect("Sectors", options=["Tech", "Leveraged", "Finance", "Energy"], default=["Tech", "Finance"])
+    user_cushion = st.slider("Min ITM Cushion %", 5, 25, 10) if "Deep ITM" in strategy else 0
+    
+    tickers = ["AAPL", "NVDA", "AMD", "TSLA", "PLTR", "SOXL", "TQQQ", "SPY", "QQQ", "BITX"]
 
 # -------------------------------------------------
-# 3. SCANNER ENGINE (With Collateral Validation)
+# 3. SCANNER ENGINE
 # -------------------------------------------------
 def scan_ticker(t, strategy_type, target_goal, cushion_limit, account_total):
     try:
         stock = yf.Ticker(t)
         price = stock.fast_info['last_price']
         
-        for exp in stock.options[:3]:
+        for exp in stock.options[:2]: # Check nearest 2 expirations
             chain = stock.option_chain(exp)
             df = chain.puts if "Put" in strategy_type else chain.calls
             
@@ -70,32 +64,65 @@ def scan_ticker(t, strategy_type, target_goal, cushion_limit, account_total):
             prem = float(match["lastPrice"])
             strike = float(match["strike"])
             juice_per_contract = (prem - max(0, price - strike)) * 100 if "Call" in strategy_type else prem * 100
+            contracts = int(np.ceil(target_goal / juice_per_contract)) if juice_per_contract > 0 else 0
             
-            # CALCULATE CONTRACTS
-            contracts_needed = int(np.ceil(target_goal / juice_per_contract)) if juice_per_contract > 0 else 0
-            
-            # CALCULATE REQUIRED COLLATERAL
-            collateral_req = (price * 100 * contracts_needed) if "Call" in strategy_type else (strike * 100 * contracts_needed)
-            
-            if collateral_req > account_total:
-                return None # Skip tickers that require too much collateral
+            collateral = (price * 100 * contracts) if "Call" in strategy_type else (strike * 100 * contracts)
+            if collateral > account_total: return None
+
+            cushion = round(((price - (price - prem)) / price) * 100, 1)
+            grade = "🟢 A" if cushion > 12 else "🟡 B" if cushion > 7 else "🔴 C"
 
             return {
-                "Ticker": t, "Strike": strike, "Juice/Contract": round(juice_per_contract, 2),
-                "Contracts": contracts_needed, "Collateral Req": round(collateral_req, 2),
-                "Cushion %": round(((price - (price-prem))/price)*100, 2)
+                "Ticker": t, "Grade": grade, "Price": round(price, 2), "Strike": strike,
+                "Juice/Con": round(juice_per_contract, 2), "Contracts": contracts,
+                "Cushion %": cushion, "ROI %": round((juice_per_contract/collateral)*100, 2)
             }
     except: return None
 
 # -------------------------------------------------
-# 4. EXECUTION
+# 4. DASHBOARD EXECUTION
 # -------------------------------------------------
-if not is_overleveraged:
-    if st.button("RUN GLOBAL SCAN ⚡", use_container_width=True):
-        univ = ["AAPL", "AMD", "NVDA", "TSLA", "MSFT", "PLTR", "BAC", "SPY", "QQQ", "SOXL", "TQQQ"]
-        with ThreadPoolExecutor(max_workers=10) as ex:
-            results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, total_acc), univ) if r]
-        st.session_state.results = results
+if st.button("RUN GENERATIONAL SCAN ⚡", use_container_width=True):
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        results = [r for r in ex.map(lambda t: scan_ticker(t, strategy, weekly_goal, user_cushion, total_acc), tickers) if r]
+    st.session_state.results = results
 
 if "results" in st.session_state:
-    st.dataframe(pd.DataFrame(st.session_state.results), use_container_width=True)
+    df = pd.DataFrame(st.session_state.results)
+    # Display table with selection
+    sel = st.dataframe(df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if sel.selection.rows:
+        row = df.iloc[sel.selection.rows[0]]
+        st.divider()
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # BACK: Chart with Bollinger Bands enabled
+            components.html(f"""
+                <div id="tradingview_chart" style="height:450px;"></div>
+                <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+                <script type="text/javascript">
+                new TradingView.widget({{
+                  "autosize": true, "symbol": "{row['Ticker']}", "interval": "D",
+                  "timezone": "Etc/UTC", "theme": "light", "style": "1",
+                  "locale": "en", "toolbar_bg": "#f1f3f6", "enable_publishing": false,
+                  "hide_side_toolbar": false, "allow_symbol_change": true,
+                  "container_id": "tradingview_chart", "studies": ["BB@tv-basicstudies"]
+                }});
+                </script>
+            """, height=460)
+            
+        with col2:
+            st.markdown(f"""
+                <div class="card">
+                    <h3>{row['Ticker']} <span class="grade-{row['Grade'][-1].lower()}">{row['Grade']}</span></h3>
+                    <p class="juice-val">${row['Juice/Con'] * row['Contracts']:,.2f} Total Juice</p>
+                    <hr>
+                    <b>Contracts to Sell:</b> {row['Contracts']}<br>
+                    <b>Strike Price:</b> ${row['Strike']}<br>
+                    <b>Cushion:</b> {row['Cushion %']}%<br>
+                    <p style="font-size: 12px; color: gray; margin-top:10px;">
+                    Ensure strike is below the lower Bollinger Band for maximum safety.</p>
+                </div>
+            """, unsafe_allow_html=True)
