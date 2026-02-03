@@ -81,40 +81,39 @@ def mid_price(row):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v24")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v25")
     
-    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v24")
+    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v25")
     
     if goal_type == "Percentage (%)":
-        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v24")
+        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v25")
         goal_amt = acct * (goal_pct / 100)
     else:
-        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v24")
+        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v25")
         goal_pct = (goal_amt / acct) * 100
     
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v24")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v24")
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v24")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v25")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v25")
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v25")
     
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
-        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v24")
+        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v25")
     
     is_itm_call = strategy == "Deep ITM Covered Call"
     is_itm_put = strategy == "Cash Secured Put" and put_mode == "ITM"
     cushion_val = 0
     if is_itm_call or is_itm_put:
-        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v24")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v25")
 
     st.divider()
-    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v24")
-    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v24")
+    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v25")
+    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v25")
     
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
     st.divider()
-    # Updated watchlist with high-leverage ETFs (TQQQ, SOXL, UPRO, SQQQ, etc.)
-    text = st.text_area("Watchlist", value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA", height=150, key="cfg_watchlist_v23")
+    text = st.text_area("Watchlist", value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA", height=150, key="cfg_watchlist_v25")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -123,7 +122,11 @@ with st.sidebar:
 def scan(t):
     try:
         tk = yf.Ticker(t)
-        if etf_only and tk.info.get('quoteType') not in ['ETF', 'EQUITY']: return None
+        q_type = tk.info.get('quoteType', 'EQUITY')
+        
+        # ETF Filter Logic
+        if etf_only and q_type != 'ETF': return None
+        
         if f_sound:
             info = tk.info
             if info.get('trailingEps', -1) <= 0: return None
@@ -182,6 +185,7 @@ def scan(t):
                 res = {
                     "Ticker": f"{t}{goal_met_icon}", "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
                     "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "OI": int(open_int),
+                    "Type": q_type, # Identifying asset type
                     "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
                     "Total Prem": round(total_prem * 100, 2), "Total Return %": round(total_ret, 2), 
                     "Contracts": needed, "Total Juice": round(juice_con * needed, 2), 
@@ -196,20 +200,13 @@ def scan(t):
 # -------------------------------------------------
 st.title("🧃 JuiceBox Pro")
 
-with st.expander("🚀 How to Use JuiceBox Pro™"):
-    st.markdown("""
-    * **Set Your Foundation:** Enter Account Value in the sidebar.
-    * **Define Your Goal:** Toggle **$** or **%**.
-    * **🎯 One Contract Goal:** Bullseye appears if one contract hits your weekly target.
-    """)
-
 is_open, et_time = get_market_status()
 spy_price, spy_pct = get_spy_condition()
 st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market-closed'}">
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v23"):
-    with st.spinner(f"Scanning for high-leverage opportunities..."):
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v25"):
+    with st.spinner(f"Scanning for opportunities..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
@@ -218,8 +215,9 @@ if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
-        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_results_df_v23")
+        # Added 'Type' to table columns
+        cols = ["Ticker", "Type", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_results_df_v25")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
@@ -242,6 +240,7 @@ if "results" in st.session_state:
                 <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
                 <div class="juice-val">{r['Total Return %']}%</div>
                 <hr>
+                <b>Asset Type:</b> {r['Type']}<br>
                 <b>Goal Progress:</b> {round((r['Total Juice']/goal_amt)*100, 1)}% of goal<br>
                 <b>Breakdown:</b> Extrinsic: ${r['Extrinsic']} | Intrinsic: ${r['Intrinsic']}<br>
                 <hr>
@@ -250,4 +249,4 @@ if "results" in st.session_state:
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Leverage ETFs carry higher risk.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Information is for educational purposes only.</div>""", unsafe_allow_html=True)
