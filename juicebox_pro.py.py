@@ -154,10 +154,18 @@ with st.sidebar:
     f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v26")
     etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v26")
 
-    # speed controls
-    max_expirations = st.slider("Max expirations per ticker", 1, 8, 2, key="cfg_max_exp_v26")
+    # --- NEW: hide advanced perf knobs behind toggle ---
+    advanced_perf = st.toggle("Advanced performance settings", value=False, key="cfg_adv_perf_v26")
+
+    if advanced_perf:
+        max_expirations = st.slider("Max expirations per ticker", 1, 8, 2, key="cfg_max_exp_v26")
+        workers = st.slider("Workers", 5, 30, 20, key="cfg_workers_v26")
+    else:
+        max_expirations = 2
+        workers = 20
+
+    # timeout stays visible (important)
     scan_timeout_sec = st.slider("Per-ticker timeout (sec)", 2, 25, 8, key="cfg_timeout_v26")
-    workers = st.slider("Workers", 5, 30, 20, key="cfg_workers_v26")
 
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
