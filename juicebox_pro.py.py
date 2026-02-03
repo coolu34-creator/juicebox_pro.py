@@ -81,39 +81,39 @@ def mid_price(row):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v25")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v26")
     
-    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v25")
+    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v26")
     
     if goal_type == "Percentage (%)":
-        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v25")
+        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v26")
         goal_amt = acct * (goal_pct / 100)
     else:
-        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v25")
+        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v26")
         goal_pct = (goal_amt / acct) * 100
     
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v25")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v25")
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v25")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v26")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v26")
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v26")
     
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
-        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v25")
+        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v26")
     
     is_itm_call = strategy == "Deep ITM Covered Call"
     is_itm_put = strategy == "Cash Secured Put" and put_mode == "ITM"
     cushion_val = 0
     if is_itm_call or is_itm_put:
-        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v25")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v26")
 
     st.divider()
-    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v25")
-    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v25")
+    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v26")
+    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v26")
     
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
     st.divider()
-    text = st.text_area("Watchlist", value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA", height=150, key="cfg_watchlist_v25")
+    text = st.text_area("Watchlist", value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA", height=150, key="cfg_watchlist_v26")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -123,10 +123,7 @@ def scan(t):
     try:
         tk = yf.Ticker(t)
         q_type = tk.info.get('quoteType', 'EQUITY')
-        
-        # ETF Filter Logic
         if etf_only and q_type != 'ETF': return None
-        
         if f_sound:
             info = tk.info
             if info.get('trailingEps', -1) <= 0: return None
@@ -151,8 +148,8 @@ def scan(t):
             elif strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
             elif strategy == "ATM Covered Call":
-                df["dist"] = abs(df["strike"] - price)
-                df = df.sort_values("dist").head(1)
+                # REFINED: Grabs the 1st strike price ABOVE current price (OTM)
+                df = df[df["strike"] > price].sort_values("strike").head(1)
             elif strategy == "Cash Secured Put":
                 if put_mode == "OTM":
                     df = df[df["strike"] <= price]
@@ -167,6 +164,7 @@ def scan(t):
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
 
+                # ATM uses Total Premium
                 if strategy == "ATM Covered Call":
                     juice_val = total_prem
                 else:
@@ -185,8 +183,7 @@ def scan(t):
                 res = {
                     "Ticker": f"{t}{goal_met_icon}", "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
                     "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "OI": int(open_int),
-                    "Type": q_type, # Identifying asset type
-                    "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
+                    "Type": q_type, "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
                     "Total Prem": round(total_prem * 100, 2), "Total Return %": round(total_ret, 2), 
                     "Contracts": needed, "Total Juice": round(juice_con * needed, 2), 
                     "Collateral": round(needed * coll_con, 0)
@@ -205,7 +202,7 @@ spy_price, spy_pct = get_spy_condition()
 st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market-closed'}">
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v25"):
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v26"):
     with st.spinner(f"Scanning for opportunities..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
@@ -215,9 +212,8 @@ if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
-        # Added 'Type' to table columns
         cols = ["Ticker", "Type", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_results_df_v25")
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_results_df_v26")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
