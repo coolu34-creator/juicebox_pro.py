@@ -60,14 +60,12 @@ def get_spy_condition():
     except: pass
     return 0, 0
 
-@st.cache_data(ttl=30) # Reduced TTL for faster live updates
+@st.cache_data(ttl=30)
 def get_live_price(t):
     try:
         tk = yf.Ticker(t)
-        # Force check for live price instead of previous close
         live_val = tk.info.get('regularMarketPrice')
         if live_val: return float(live_val)
-        
         hist = tk.history(period="1d", interval="1m")
         if not hist.empty: return float(hist["Close"].iloc[-1])
     except: pass
@@ -83,39 +81,40 @@ def mid_price(row):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v23")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v24")
     
-    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v23")
+    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v24")
     
     if goal_type == "Percentage (%)":
-        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v23")
+        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v24")
         goal_amt = acct * (goal_pct / 100)
     else:
-        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v23")
+        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v24")
         goal_pct = (goal_amt / acct) * 100
     
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v23")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v23")
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v23")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v24")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v24")
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v24")
     
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
-        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v23")
+        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v24")
     
     is_itm_call = strategy == "Deep ITM Covered Call"
     is_itm_put = strategy == "Cash Secured Put" and put_mode == "ITM"
     cushion_val = 0
     if is_itm_call or is_itm_put:
-        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v23")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v24")
 
     st.divider()
-    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v23")
-    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v23")
+    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v24")
+    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v24")
     
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
     st.divider()
-    text = st.text_area("Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="cfg_watchlist_v23")
+    # Updated watchlist with high-leverage ETFs (TQQQ, SOXL, UPRO, SQQQ, etc.)
+    text = st.text_area("Watchlist", value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA", height=150, key="cfg_watchlist_v23")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -124,7 +123,7 @@ with st.sidebar:
 def scan(t):
     try:
         tk = yf.Ticker(t)
-        if etf_only and tk.info.get('quoteType') != 'ETF': return None
+        if etf_only and tk.info.get('quoteType') not in ['ETF', 'EQUITY']: return None
         if f_sound:
             info = tk.info
             if info.get('trailingEps', -1) <= 0: return None
@@ -210,7 +209,7 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v23"):
-    with st.spinner(f"Pulling LIVE market data for ${goal_amt:,.2f} goal..."):
+    with st.spinner(f"Scanning for high-leverage opportunities..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
@@ -251,4 +250,4 @@ if "results" in st.session_state:
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
 
-st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Information is for educational purposes only.</div>""", unsafe_allow_html=True)
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Leverage ETFs carry higher risk.</div>""", unsafe_allow_html=True)
