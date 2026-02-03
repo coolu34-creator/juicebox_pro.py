@@ -13,7 +13,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, time, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 
 # -------------------------------------------------
 # 1. APP SETUP & STYLING
@@ -76,7 +76,7 @@ def mid_price(row):
     if pd.notna(bid) and pd.notna(ask) and ask > 0: return (bid + ask) / 2
     return float(lastp) if pd.notna(lastp) else 0
 
-# --- NEW: batch prices for big watchlists (200+ tickers) ---
+# --- batch prices for big watchlists (200+ tickers) ---
 @st.cache_data(ttl=30)
 def get_live_prices_batch(tickers_list):
     try:
@@ -107,7 +107,7 @@ def get_live_prices_batch(tickers_list):
     except:
         return {t: None for t in tickers_list}
 
-# --- NEW: cache info, and only load when needed ---
+# --- cache info and only load when needed ---
 @st.cache_data(ttl=1800)
 def get_info_cached(t):
     try:
@@ -132,7 +132,7 @@ with st.sidebar:
         goal_pct = (goal_amt / acct) * 100
 
     price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v26")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v26")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 14), key="cfg_dte_rng_v26")
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v26")
 
     put_mode = "OTM"
@@ -149,13 +149,21 @@ with st.sidebar:
     f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v26")
     etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v26")
 
-    # NEW: cap expirations scanned per ticker (keeps speed with 200+ tickers)
-    max_expirations = st.slider("Max expirations per ticker", 1, 8, 3, key="cfg_max_exp_v26")
+    # cap expirations scanned per ticker (fast for 200+ tickers)
+    max_expirations = st.slider("Max expirations per ticker", 1, 8, 2, key="cfg_max_exp_v26")
+
+    # per-ticker timeout so scans don't look frozen
+    scan_timeout_sec = st.slider("Per-ticker timeout (sec)", 2, 25, 8, key="cfg_timeout_v26")
 
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
     st.divider()
-    text = st.text_area("Watchlist", value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA", height=150, key="cfg_watchlist_v26")
+    text = st.text_area(
+        "Watchlist",
+        value="TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA",
+        height=150,
+        key="cfg_watchlist_v26"
+    )
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -165,11 +173,11 @@ def scan(t):
     try:
         tk = yf.Ticker(t)
 
-        # --- FAST: price first (from batch map), before info/options work ---
+        # price first (batch map), before any info/options work
         price = st.session_state.get("price_map", {}).get(t) or get_live_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None
 
-        # --- ONLY pull info if you need it (ETF-only or fundamentals) ---
+        # only pull info if needed (ETF-only or fundamentals)
         q_type = 'EQUITY'
         info = None
         if etf_only or f_sound:
@@ -186,7 +194,7 @@ def scan(t):
 
         today = datetime.now()
 
-        # --- FAST: filter expirations by DTE, then cap how many we scan ---
+        # filter expirations by DTE then cap how many we scan
         valid_exps = []
         for exp in tk.options:
             try:
@@ -266,13 +274,44 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v26"):
     with st.spinner(f"Scanning for opportunities..."):
-        # --- NEW: batch-price map for fast scans across 200+ tickers ---
+
+        # batch-price map for fast scans across 200+ tickers
         st.session_state.price_map = get_live_prices_batch(tickers)
 
-        # Use more workers once price calls are batched
+        # only scan tickers with valid price in range
+        eligible = [
+            t for t in tickers
+            if (st.session_state.price_map.get(t) is not None)
+            and (price_range[0] <= st.session_state.price_map.get(t) <= price_range[1])
+        ]
+        st.write(f"Eligible tickers by price: {len(eligible)} / {len(tickers)}")
+
+        progress = st.progress(0)
+        results = []
+        timed_out = 0
+        total = len(eligible)
+
         with ThreadPoolExecutor(max_workers=20) as ex:
-            out = list(ex.map(scan, tickers))
-        st.session_state.results = [r for r in out if r is not None]
+            futures = {ex.submit(scan, t): t for t in eligible}
+
+            done_count = 0
+            for fut in as_completed(futures):
+                t = futures[fut]
+                try:
+                    r = fut.result(timeout=scan_timeout_sec)
+                    if r is not None:
+                        results.append(r)
+                except TimeoutError:
+                    timed_out += 1
+                except Exception:
+                    pass
+
+                done_count += 1
+                if done_count % 5 == 0 or done_count == total:
+                    progress.progress(done_count / total)
+
+        st.session_state.results = results
+        st.session_state.timed_out = timed_out
 
 if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
@@ -310,5 +349,8 @@ if "results" in st.session_state:
                 <b>Collateral:</b> ${r['Collateral']:,.0f}
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
+
+        if "timed_out" in st.session_state and st.session_state.timed_out:
+            st.caption(f"Timed out tickers (skipped): {st.session_state.timed_out}")
 
 st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Information is for educational purposes only.</div>""", unsafe_allow_html=True)
