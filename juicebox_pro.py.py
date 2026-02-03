@@ -79,39 +79,39 @@ def mid_price(row):
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
-    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v20")
+    acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v21")
     
-    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v20")
+    goal_type = st.radio("Goal Setting Mode", ["Dollar ($)", "Percentage (%)"], horizontal=True, key="cfg_goal_type_v21")
     
     if goal_type == "Percentage (%)":
-        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v20")
+        goal_pct = st.number_input("Weekly Goal (%)", 0.1, 10.0, 1.5, step=0.1, key="cfg_goal_pct_v21")
         goal_amt = acct * (goal_pct / 100)
     else:
-        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v20")
+        goal_amt = st.number_input("Weekly Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_amt_v21")
         goal_pct = (goal_amt / acct) * 100
     
-    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v20")
-    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v20")
-    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v20")
+    price_range = st.slider("Stock Price Range ($)", 1, 500, (2, 100), key="cfg_price_rng_v21")
+    dte_range = st.slider("Days to Expiration (DTE)", 0, 45, (0, 30), key="cfg_dte_rng_v21")
+    strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v21")
     
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
-        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v20")
+        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_mode_v21")
     
     is_itm_call = strategy == "Deep ITM Covered Call"
     is_itm_put = strategy == "Cash Secured Put" and put_mode == "ITM"
     cushion_val = 0
     if is_itm_call or is_itm_put:
-        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v20")
+        cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cushion_v21")
 
     st.divider()
-    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v20")
-    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v20")
+    f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v21")
+    etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v21")
     
-    st.info(f"💡 **OI 500+ Active** | Targeting: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
+    st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f}")
 
     st.divider()
-    text = st.text_area("Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="cfg_watchlist_v20")
+    text = st.text_area("Watchlist", value="SOFI, PLUG, LUMN, OPEN, BBAI, CLOV, MVIS, MPW, PLTR, AAL, F, NIO, BAC, T, VZ, AAPL, AMD, TSLA, PYPL, KO, O, TQQQ, SOXL, C, MARA, RIOT, COIN, DKNG, LCID, AI, GME, AMC, SQ, SHOP, NU, RIVN, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, NET, CRWD, SNOW, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, NFLX, PARA, SPOT, BOIL, UNG", height=150, key="cfg_watchlist_v21")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
@@ -144,6 +144,9 @@ def scan(t):
                 df = df[df["strike"] <= price * (1 - cushion_val / 100)]
             elif strategy == "Standard OTM Covered Call":
                 df = df[df["strike"] > price]
+            elif strategy == "ATM Covered Call":
+                df["dist"] = abs(df["strike"] - price)
+                df = df.sort_values("dist").head(1)
             elif strategy == "Cash Secured Put":
                 if put_mode == "OTM":
                     df = df[df["strike"] <= price]
@@ -155,18 +158,25 @@ def scan(t):
                 open_int = row.get("openInterest", 0)
                 if open_int < 500 or total_prem <= 0: continue
 
+                # --- EXTRINSIC MATH ---
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
-                if intrinsic > 0 and extrinsic <= 0.05: continue
 
-                juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
+                # ATM Logic: Use full premium for juice and return calculations
+                if strategy == "ATM Covered Call":
+                    juice_con = total_prem * 100
+                else:
+                    # Other ITM Logic: Juice is Extrinsic only
+                    if intrinsic > 0 and extrinsic <= 0.05: continue
+                    juice_con = extrinsic * 100 if intrinsic > 0 else total_prem * 100
+
                 coll_con = strike * 100 if is_put else price * 100
                 total_ret = (juice_con / coll_con) * 100
                 
                 needed = max(1, int(np.ceil(goal_amt / (juice_con if juice_con > 0 else 1))))
                 if (needed * coll_con) > acct: continue
 
-                # FIX: Bullseye only if ONE contract meets the goal
+                # Goal Met Bullseye Logic
                 goal_met_icon = " 🎯" if juice_con >= goal_amt else ""
 
                 res = {
@@ -190,7 +200,7 @@ with st.expander("🚀 How to Use JuiceBox Pro™"):
     st.markdown("""
     * **Set Your Foundation:** Enter your Account Value in the sidebar.
     * **Define Your Goal:** Switch between **$** or **%** mode.
-    * **Choose Your "Juice" Type:** Select your strategy.
+    * **Choose Your "Juice" Type:** Select your strategy. ATM uses total premium; Deep ITM uses extrinsic only.
     * **Analyze the Results:** **🎯 indicates the Weekly Goal is met with just ONE contract.**
     """)
 
@@ -214,7 +224,7 @@ spy_price, spy_pct = get_spy_condition()
 st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market-closed'}">
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
-if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v20"):
+if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v21"):
     with st.spinner(f"Scanning for {goal_amt:,.2f} weekly goal..."):
         with ThreadPoolExecutor(max_workers=10) as ex:
             out = list(ex.map(scan, tickers))
@@ -225,7 +235,7 @@ if "results" in st.session_state:
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
         cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
-        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_results_df_v20")
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="main_results_df_v21")
         
         if sel.selection.rows:
             r = df.iloc[sel.selection.rows[0]]
@@ -244,12 +254,16 @@ if "results" in st.session_state:
                 components.html(tv_html, height=510)
             with c2:
                 g = r["Grade"][-1].lower()
+                
+                # Dynamic labels for the card based on strategy
+                juice_label = "Total Premium" if strategy == "ATM Covered Call" else "Extrinsic (Juice)"
+                
                 card_html = f"""<div class="card">
                 <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
                 <div class="juice-val">{r['Total Return %']}%</div>
                 <hr>
                 <b>Goal Progress:</b> {round((r['Total Juice']/goal_amt)*100, 1)}% of goal<br>
-                <b>Breakdown:</b> Extrinsic: ${r['Extrinsic']} | Intrinsic: ${r['Intrinsic']}<br>
+                <b>Breakdown:</b> {juice_label}: ${r['Extrinsic'] if strategy != 'ATM Covered Call' else r['Total Prem']}<br>
                 <hr>
                 <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']}<br>
                 <b>Collateral:</b> ${r['Collateral']:,.0f}
