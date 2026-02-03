@@ -13,8 +13,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
-import random
-import requests
 from datetime import datetime, time as dtime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
@@ -35,15 +33,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# 2. DATA HELPERS (Bypass Guards Added)
+# 2. DATA HELPERS
 # -------------------------------------------------
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0"
-]
-
 def get_market_status():
     now_utc = datetime.utcnow()
     now_et = now_utc - timedelta(hours=5) 
@@ -56,21 +47,15 @@ def get_market_status():
 
 @st.cache_data(ttl=60)
 def get_live_price(t):
-    time.sleep(random.uniform(0.1, 0.3)) # Randomized delay
     try:
-        # Create a session with a random User-Agent to bypass blocks
-        session = requests.Session()
-        session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
-        
-        tk = yf.Ticker(t, session=session)
-        # Try fast_info first (most resilient)
-        try:
-            return float(tk.fast_info['lastPrice'])
-        except:
-            hist = tk.history(period="1d", interval="1m")
-            if not hist.empty: return float(hist["Close"].iloc[-1])
-    except Exception as e:
-        pass
+        # Rate limit breather
+        time.sleep(0.05)
+        tk = yf.Ticker(t)
+        live_val = tk.info.get('regularMarketPrice')
+        if live_val: return float(live_val)
+        hist = tk.history(period="1d")
+        if not hist.empty: return float(hist["Close"].iloc[-1])
+    except: pass
     return None
 
 def mid_price(row):
@@ -79,20 +64,20 @@ def mid_price(row):
     return float(lastp) if pd.notna(lastp) else 0
 
 # -------------------------------------------------
-# 3. SIDEBAR
+# 3. SIDEBAR (CONFIG & WATCHLIST)
 # -------------------------------------------------
 with st.sidebar:
     st.header("🧃 Configuration")
     acct = st.number_input("Account Value ($)", 1000, 1000000, 10000, step=500, key="cfg_acct_v30")
     goal_amt = st.number_input("Goal ($)", 1.0, 100000.0, 150.0, step=10.0, key="cfg_goal_v30")
     
-    price_range = st.slider("Price Range ($)", 1, 500, (2, 100), key="cfg_price_v30")
+    price_range = st.slider("Price Range ($)", 1, 500, (2, 100), key="cfg_pr_v30")
     dte_range = st.slider("DTE", 0, 45, (0, 30), key="cfg_dte_v30")
     strategy = st.selectbox("Strategy", ["Deep ITM Covered Call", "Standard OTM Covered Call", "ATM Covered Call", "Cash Secured Put"], key="cfg_strat_v30")
     
     put_mode = "OTM"
     if strategy == "Cash Secured Put":
-        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_put_v30")
+        put_mode = st.radio("Put Mode", ["OTM", "ITM"], horizontal=True, key="cfg_pm_v30")
     
     is_itm = strategy == "Deep ITM Covered Call" or (strategy == "Cash Secured Put" and put_mode == "ITM")
     cushion_val = st.slider("Min ITM Cushion %", 0, 50, 10, key="cfg_cush_v30") if is_itm else 0
@@ -101,20 +86,20 @@ with st.sidebar:
     etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v30")
     
     st.divider()
-    watchlist_text = "TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, IWM, DIA, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA, AAPL, MSFT, AMZN, GOOGL, META, NFLX, BABA, NIO, GME, AMC, HOOD, MARA, RIOT, COIN, MSTR, SQ, SHOP, U, SNOW, CRWD, NET, AI, PLUG, CLOV, OPEN, BBAI, MVIS, MPW, BAC, T, VZ, KO, O, C, NU, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, PARA, SPOT"
-    text = st.text_area("Watchlist", value=watchlist_text, height=150, key="cfg_watch_v30")
+    # 200 TICKER WATCHLIST LOADED
+    watchlist_200 = "TQQQ, SOXL, UPRO, SQQQ, LABU, FNGU, TECL, BULZ, TNA, FAS, SOXS, BOIL, UNG, SPY, QQQ, IWM, DIA, VOO, VTI, QLD, SSO, USD, DIG, ERX, DRN, PILL, CURE, WANT, WEBL, UBT, TMF, TYD, SOFI, PLTR, RIVN, DKNG, AAL, LCID, PYPL, AMD, TSLA, NVDA, AAPL, MSFT, AMZN, GOOGL, META, NFLX, BABA, NIO, GME, AMC, HOOD, MARA, RIOT, COIN, MSTR, SQ, SHOP, U, SNOW, CRWD, NET, AI, PLUG, CLOV, OPEN, BBAI, MVIS, MPW, BAC, T, VZ, KO, O, C, NU, GRAB, CCL, NCLH, RCL, SAVE, JBLU, UAL, DASH, ROKU, CHWY, CVNA, BKNG, ABNB, ARM, AVGO, MU, INTC, TSM, GFS, PLD, AMT, CMCSA, DIS, PARA, SPOT, XOM, CVX, SLB, HAL, OXY, MPC, VLO, RIG, PBR, VALE, FCX, NEM, GOLD, GDX, GDXJ, SIL, SLV, GLD, TLT, HYG, JNK, LQD, BND, KRE, KBE, XLF, XLK, XLV, XLI, XLE, XLU, XLB, XLP, XLY, XRT, SMH, TAN, FAN, LIT, ARKK, ARKG, ARKF, BITO, COLD, MP, ALB, QS, RUN, ENPH, SEDG, FSLR, SE, MELI, PDD, JD, LI, XPEV, BILI, FUTU, CPNG, PATH, DDOG, TEAM, ZS, OKTA, MDB, PANW, FTNT, BILL, AFRM, UPST, LC, V, MA, GS, JPM, WFC, MS, SCHW, TDOC, RBLX, NKLA, F, GM, TM, STLA, HMC, RACE, BYDDF"
+    text = st.text_area("Watchlist (200 Symbols)", value=watchlist_200, height=150, key="cfg_wl_v30")
     tickers = sorted({t.upper() for t in text.replace(",", " ").split() if t.strip()})
 
 # -------------------------------------------------
-# 4. SCANNER LOGIC
+# 4. SCANNER LOGIC (PARALLEL CONNECTION GUARD)
 # -------------------------------------------------
 def scan(t):
     try:
-        session = requests.Session()
-        session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
-        tk = yf.Ticker(t, session=session)
-        
-        if etf_only and tk.info.get('quoteType') != 'ETF': return None
+        time.sleep(0.1) # Connection Guard
+        tk = yf.Ticker(t)
+        q_type = tk.info.get('quoteType', 'EQUITY')
+        if etf_only and q_type != 'ETF': return None
 
         price = get_live_price(t)
         if not price or not (price_range[0] <= price <= price_range[1]): return None
@@ -122,8 +107,7 @@ def scan(t):
 
         today = datetime.now()
         best = None
-        # Only check the first 2 expiries to save API calls
-        for exp in tk.options[:2]: 
+        for exp in tk.options[:5]: # Search nearest 5 expirations for speed
             exp_dte = (datetime.strptime(exp, "%Y-%m-%d") - today).days
             if not (dte_range[0] <= exp_dte <= dte_range[1]): continue
 
@@ -138,7 +122,10 @@ def scan(t):
             elif strategy == "ATM Covered Call":
                 df = df[df["strike"] > price].sort_values("strike").head(1)
             elif strategy == "Cash Secured Put":
-                df = df[df["strike"] <= price] if put_mode == "OTM" else df[df["strike"] >= price * (1 + cushion_val / 100)]
+                if put_mode == "OTM":
+                    df = df[df["strike"] <= price]
+                else: 
+                    df = df[df["strike"] >= price * (1 + cushion_val / 100)]
 
             for _, row in df.iterrows():
                 strike, total_prem = row["strike"], mid_price(row)
@@ -151,14 +138,14 @@ def scan(t):
                 juice_con = juice_val * 100
                 coll_con = strike * 100 if is_put else price * 100
                 total_ret = (juice_con / coll_con) * 100
-                needed = max(1, int(np.ceil(goal_amt / (juice_con if juice_con > 0 else 1))))
                 
+                needed = max(1, int(np.ceil(goal_amt / juice_con)))
                 if (needed * coll_con) > acct: continue
                 goal_met_icon = " 🎯" if juice_con >= goal_amt else ""
 
                 res = {
                     "Ticker": f"{t}{goal_met_icon}", "RawT": t, "Grade": "🟢 A" if total_ret > 5 else "🟡 B",
-                    "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "OI": int(row["openInterest"]),
+                    "Price": round(price, 2), "Strike": round(strike, 2), "Expiration": exp, "OI": int(row.get("openInterest", 0)),
                     "Extrinsic": round(extrinsic * 100, 2), "Intrinsic": round(intrinsic * 100, 2),
                     "Total Prem": round(total_prem * 100, 2), "Total Return %": round(total_ret, 2), 
                     "Contracts": needed, "Total Juice": round(juice_con * needed, 2), "Collateral": round(needed * coll_con, 0)
@@ -176,8 +163,8 @@ is_open, et_time = get_market_status()
 st.markdown(f"<div class='market-banner' style='background-color: {'#dcfce7' if is_open else '#fee2e2'}'>{'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')}</div>", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡"):
-    with st.spinner(f"Agent Rotator Active: Bypassing blocks..."):
-        with ThreadPoolExecutor(max_workers=2) as ex: # Extreme safety
+    with st.spinner(f"Scanning 200 symbols... this takes ~45 seconds."):
+        with ThreadPoolExecutor(max_workers=4) as ex: # Throttled for safety
             out = list(ex.map(scan, tickers))
         st.session_state.results = [r for r in out if r is not None]
 
@@ -185,4 +172,28 @@ if "results" in st.session_state:
     df = pd.DataFrame(st.session_state.results)
     if not df.empty:
         df = df.sort_values("Total Return %", ascending=False)
-        st.dataframe(df.drop(columns=["RawT"]), use_container_width=True, hide_index=True)
+        cols = ["Ticker", "Grade", "Price", "Strike", "Expiration", "OI", "Extrinsic", "Intrinsic", "Total Prem", "Total Return %"]
+        sel = st.dataframe(df[cols], use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun", key="df_v30")
+        
+        if sel.selection.rows:
+            r = df.iloc[sel.selection.rows[0]]
+            st.divider()
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                tv_html = f"""<div id="tv" style="height:500px"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"autosize": true, "symbol": "{r['RawT']}", "interval": "D", "theme": "light", "container_id": "tv", "studies": ["BB@tv-basicstudies"]}});</script>"""
+                components.html(tv_html, height=510)
+            with c2:
+                g = r["Grade"][-1].lower()
+                card_html = f"""<div class="card">
+                <div style="display:flex; justify-content:space-between;"><h2>{r['Ticker']}</h2><span class="grade-{g}">{r['Grade']}</span></div>
+                <div class="juice-val">{r['Total Return %']}%</div>
+                <hr>
+                <b>Goal Progress:</b> {round((r['Total Juice']/goal_amt)*100, 1)}% of goal<br>
+                <b>Breakdown:</b> Extrinsic: ${r['Extrinsic']} | Intrinsic: ${r['Intrinsic']}<br>
+                <hr>
+                <b>Contracts:</b> {r['Contracts']} | <b>Total Juice:</b> ${r['Total Juice']}<br>
+                <b>Collateral:</b> ${r['Collateral']:,.0f}
+                </div>"""
+                st.markdown(card_html, unsafe_allow_html=True)
+
+st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Scan may be slower due to Yahoo Rate Limits.</div>""", unsafe_allow_html=True)
