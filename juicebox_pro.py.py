@@ -57,7 +57,8 @@ def get_spy_condition():
             prev_close = spy.info.get('previousClose', curr_price)
             pct_change = ((curr_price - prev_close) / prev_close) * 100
             return curr_price, pct_change
-    except: pass
+    except:
+        pass
     return 0, 0
 
 @st.cache_data(ttl=30)
@@ -65,15 +66,19 @@ def get_live_price(t):
     try:
         tk = yf.Ticker(t)
         live_val = tk.info.get('regularMarketPrice')
-        if live_val: return float(live_val)
+        if live_val:
+            return float(live_val)
         hist = tk.history(period="1d", interval="1m")
-        if not hist.empty: return float(hist["Close"].iloc[-1])
-    except: pass
+        if not hist.empty:
+            return float(hist["Close"].iloc[-1])
+    except:
+        pass
     return None
 
 def mid_price(row):
     bid, ask, lastp = row.get("bid"), row.get("ask"), row.get("lastPrice")
-    if pd.notna(bid) and pd.notna(ask) and ask > 0: return (bid + ask) / 2
+    if pd.notna(bid) and pd.notna(ask) and ask > 0:
+        return (bid + ask) / 2
     return float(lastp) if pd.notna(lastp) else 0
 
 # --- batch prices for big watchlists (200+ tickers) ---
@@ -149,11 +154,10 @@ with st.sidebar:
     f_sound = st.toggle("Fundamental Sound Stocks", value=False, key="cfg_fsound_v26")
     etf_only = st.toggle("ETF Only Mode", value=False, key="cfg_etf_v26")
 
-    # cap expirations scanned per ticker (fast for 200+ tickers)
+    # speed controls
     max_expirations = st.slider("Max expirations per ticker", 1, 8, 2, key="cfg_max_exp_v26")
-
-    # per-ticker timeout so scans don't look frozen
     scan_timeout_sec = st.slider("Per-ticker timeout (sec)", 2, 25, 8, key="cfg_timeout_v26")
+    workers = st.slider("Workers", 5, 30, 20, key="cfg_workers_v26")
 
     st.info(f"💡 **OI 500+ Active** | Goal: ${goal_amt:,.2f} ({goal_pct:.1f}%)")
 
@@ -175,7 +179,8 @@ def scan(t):
 
         # price first (batch map), before any info/options work
         price = st.session_state.get("price_map", {}).get(t) or get_live_price(t)
-        if not price or not (price_range[0] <= price <= price_range[1]): return None
+        if not price or not (price_range[0] <= price <= price_range[1]):
+            return None
 
         # only pull info if needed (ETF-only or fundamentals)
         q_type = 'EQUITY'
@@ -183,14 +188,19 @@ def scan(t):
         if etf_only or f_sound:
             info = get_info_cached(t)
             q_type = info.get('quoteType', 'EQUITY')
-            if etf_only and q_type != 'ETF': return None
+            if etf_only and q_type != 'ETF':
+                return None
 
         if f_sound:
-            if info is None: info = get_info_cached(t)
-            if info.get('trailingEps', -1) <= 0: return None
-            if info.get('recommendationKey') not in ['buy', 'strong_buy', 'hold']: return None
+            if info is None:
+                info = get_info_cached(t)
+            if info.get('trailingEps', -1) <= 0:
+                return None
+            if info.get('recommendationKey') not in ['buy', 'strong_buy', 'hold']:
+                return None
 
-        if not tk.options: return None
+        if not tk.options:
+            return None
 
         today = datetime.now()
 
@@ -204,7 +214,9 @@ def scan(t):
             if dte_range[0] <= exp_dte <= dte_range[1]:
                 valid_exps.append((exp_dte, exp))
 
-        if not valid_exps: return None
+        if not valid_exps:
+            return None
+
         valid_exps.sort(key=lambda x: x[0])
         valid_exps = valid_exps[:max_expirations]
 
@@ -229,7 +241,8 @@ def scan(t):
             for _, row in df.iterrows():
                 strike, total_prem = row["strike"], mid_price(row)
                 open_int = row.get("openInterest", 0)
-                if open_int < 500 or total_prem <= 0: continue
+                if open_int < 500 or total_prem <= 0:
+                    continue
 
                 intrinsic = max(0, price - strike) if not is_put else max(0, strike - price)
                 extrinsic = max(0, total_prem - intrinsic)
@@ -237,7 +250,8 @@ def scan(t):
                 if strategy == "ATM Covered Call":
                     juice_val = total_prem
                 else:
-                    if intrinsic > 0 and extrinsic <= 0.05: continue
+                    if intrinsic > 0 and extrinsic <= 0.05:
+                        continue
                     juice_val = extrinsic if intrinsic > 0 else total_prem
 
                 juice_con = juice_val * 100
@@ -245,7 +259,8 @@ def scan(t):
                 total_ret = (juice_con / coll_con) * 100
 
                 needed = max(1, int(np.ceil(goal_amt / juice_con)))
-                if (needed * coll_con) > acct: continue
+                if (needed * coll_con) > acct:
+                    continue
 
                 goal_met_icon = " 🎯" if juice_con >= goal_amt else ""
 
@@ -257,10 +272,12 @@ def scan(t):
                     "Contracts": needed, "Total Juice": round(juice_con * needed, 2),
                     "Collateral": round(needed * coll_con, 0)
                 }
-                if not best or total_ret > best["Total Return %"]: best = res
+                if not best or total_ret > best["Total Return %"]:
+                    best = res
 
         return best
-    except: return None
+    except:
+        return None
 
 # -------------------------------------------------
 # 5. UI DISPLAY
@@ -273,9 +290,9 @@ st.markdown(f"""<div class="market-banner {'market-open' if is_open else 'market
 {'MARKET OPEN 🟢' if is_open else 'MARKET CLOSED 🔴'} | ET: {et_time.strftime('%I:%M %p')} | SPY: ${spy_price:.2f} ({spy_pct:+.2f}%)</div>""", unsafe_allow_html=True)
 
 if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v26"):
-    with st.spinner(f"Scanning for opportunities..."):
+    with st.spinner("Scanning for opportunities..."):
 
-        # batch-price map for fast scans across 200+ tickers
+        # batch prices first
         st.session_state.price_map = get_live_prices_batch(tickers)
 
         # only scan tickers with valid price in range
@@ -291,12 +308,11 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v
         timed_out = 0
         total = len(eligible)
 
-        with ThreadPoolExecutor(max_workers=20) as ex:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             futures = {ex.submit(scan, t): t for t in eligible}
 
             done_count = 0
             for fut in as_completed(futures):
-                t = futures[fut]
                 try:
                     r = fut.result(timeout=scan_timeout_sec)
                     if r is not None:
@@ -307,7 +323,7 @@ if st.button("RUN LIVE SCAN ⚡", use_container_width=True, key="main_scan_btn_v
                     pass
 
                 done_count += 1
-                if done_count % 5 == 0 or done_count == total:
+                if total > 0 and (done_count % 5 == 0 or done_count == total):
                     progress.progress(done_count / total)
 
         st.session_state.results = results
@@ -349,8 +365,10 @@ if "results" in st.session_state:
                 <b>Collateral:</b> ${r['Collateral']:,.0f}
                 </div>"""
                 st.markdown(card_html, unsafe_allow_html=True)
+    else:
+        st.warning("Scan finished. No results met your filters.")
 
-        if "timed_out" in st.session_state and st.session_state.timed_out:
-            st.caption(f"Timed out tickers (skipped): {st.session_state.timed_out}")
+    if "timed_out" in st.session_state and st.session_state.timed_out:
+        st.caption(f"Timed out tickers (skipped): {st.session_state.timed_out}")
 
 st.markdown("""<div class="disclaimer"><b>LEGAL NOTICE:</b> JuiceBox Pro™ owned by <b>Bucforty LLC</b>. Information is for educational purposes only.</div>""", unsafe_allow_html=True)
